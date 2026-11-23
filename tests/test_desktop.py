@@ -165,3 +165,33 @@ def test_chapter_outline_edit_is_shared_with_management_editor(window,qtbot):
     assert window.outline.toPlainText()=='从管理页编辑的大纲'
     window.outline.setPlainText('从章节页编辑的大纲')
     assert window.document.toPlainText()=='从章节页编辑的大纲'
+
+
+def test_failed_memory_result_is_not_reported_as_success(window,qtbot,monkeypatch):
+    from models.domain import Chapter,Document,Settings
+    create(window)
+    state=window.state
+    state.chapters[1]=Chapter(number=1,final='正式正文',draft='正式正文',revision=1,status='final')
+    state.chapters[2]=Chapter(number=2)
+    state.documents['outline:2']=Document(approved='第二章大纲')
+    state.documents['settings']=Document(approved=Settings(worldbuilding='世界',rules=[],main_conflict='冲突',characters=[],factions=[]).model_dump_json());state.documents['main']=Document(approved='全书');state.documents['volume:1']=Document(approved='分卷')
+    state.memory_status='failed';state.pending_from=1
+    state.memory_error='等待模型响应超过120秒'
+    state.memory_diagnostic={'code':'timeout','details':'异常：APITimeoutError','reference':'test-ref'}
+    window.state=window.repo.save(state,state.version);window.number.setValue(2);window.refresh()
+    assert not window.generate_body_button.isEnabled()
+    assert not window.chapter_retry.isHidden()
+    assert '下一步' in window.chapter_status.text()
+    assert '记忆待更新' in window.chapter_list.item(0).text()
+    shown=[];monkeypatch.setattr(window,'show_issue',lambda issue,**kwargs:shown.append(issue))
+    window.submit(lambda service:window.state,message='记忆已同步，可以继续创作。')
+    qtbot.waitUntil(lambda:window.job is None,timeout=5000)
+    assert '失败' in window.statusBar().currentMessage()
+    assert '记忆已同步' not in window.statusBar().currentMessage()
+    assert shown and shown[0].settings and '300' in shown[0].next_step
+    settings=[];monkeypatch.setattr('app.desktop.ApiDialog.exec',lambda dialog:settings.append(True))
+    window.chapter_settings.click();assert settings==[True]
+    state=window.repo.load(window.state.project.project_id);state.memory_status='synced';state.memory_error='';state.pending_from=None
+    window.state=window.repo.save(state,state.version);window.refresh()
+    assert window.generate_body_button.isEnabled()
+    assert window.chapter_retry.isHidden()

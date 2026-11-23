@@ -12,13 +12,10 @@ import tiktoken
 from models.domain import Settings, Memory, ChapterPlan
 from memory.budget import request_cost, input_budget
 from prompts import SYSTEM, TASKS
+from llm.errors import ModelError, transport_error
 
 T = TypeVar('T', bound=BaseModel)
 log = logging.getLogger(__name__)
-
-
-class ModelError(ValueError):
-    pass
 
 
 class Writer(Protocol):
@@ -37,7 +34,7 @@ class OpenAIWriter:
 
     def _client(self):
         if not self.key or not self.model:
-            raise ModelError('请在“大模型 API 设置”中配置密钥和模型；网页版也可在 .env 中配置，或选择 demo 演示')
+            raise ModelError('请在“大模型 API 设置”中配置密钥和模型；网页版也可在 .env 中配置，或选择 demo 演示',code='configuration')
         if self.client is None:
             self.client = AsyncOpenAI(api_key=self.key, base_url=self.base_url,
                                       timeout=self.timeout, max_retries=0)
@@ -48,7 +45,7 @@ class OpenAIWriter:
         output_limit = int(os.getenv('NOVEL_OUTPUT_TOKENS', '6000'))
         budget = input_budget()
         if budget < 1 or request_cost(task,context,schema,self.api_mode) > budget:
-            raise ModelError('请求超出上下文预算，请精简输入或提高上下文预算')
+            raise ModelError('请求超出上下文预算，请精简输入或提高上下文预算',code='budget')
         for attempt in range(3):
             started = time.monotonic()
             try:
@@ -84,8 +81,9 @@ class OpenAIWriter:
             except (APIConnectionError, APITimeoutError, APIStatusError) as exc:
                 retryable = not isinstance(exc, APIStatusError) or exc.status_code in (408, 409, 429) or exc.status_code >= 500
                 if attempt == 2 or not retryable:
-                    code = getattr(exc, 'status_code', 'network')
-                    raise ModelError(f'模型请求失败（{code}），请检查配置、网络或额度后重试') from exc
+                    error=transport_error(exc,self.timeout,time.monotonic()-started,task,attempt+1)
+                    log.warning('model failure reference=%s code=%s task=%s attempt=%s elapsed=%.1f exception=%s',error.reference,error.code,task,attempt+1,time.monotonic()-started,type(exc).__name__)
+                    raise error from exc
                 await asyncio.sleep(2 ** attempt)
             except ValidationError as exc:
                 if attempt == 2:

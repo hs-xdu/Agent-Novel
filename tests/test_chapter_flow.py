@@ -57,3 +57,15 @@ async def test_outline_generation_waits_for_failed_memory_recovery(service):
     with pytest.raises(ValueError,match='记忆尚未同步'):
         await service.generate_document(pid,s.version,'outline:2')
     assert not service.repo.load(pid).documents.get('outline:2')
+
+
+async def test_memory_failure_diagnostic_survives_reload(service):
+    from llm.errors import ModelError
+    s=await prepare(service)
+    async def fail(*args):raise ModelError('等待模型响应超过120秒',code='timeout',details='异常：APITimeoutError',reference='persistent-reference')
+    service.writer.structured=fail
+    s=await publish(service,s,1)
+    restored=service.repo.load(s.project.project_id)
+    assert restored.memory_status=='failed' and restored.chapters[1].final
+    assert restored.memory_diagnostic['code']=='timeout'
+    assert restored.memory_diagnostic['reference']=='persistent-reference'

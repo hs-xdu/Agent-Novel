@@ -143,6 +143,7 @@ class State(Model):
     memory_candidates: dict[int, Memory] = Field(default_factory=dict)
     memory_status: Literal['synced', 'pending', 'updating', 'failed'] = 'synced'
     memory_error: str = ''
+    memory_diagnostic: dict[str, str] = Field(default_factory=dict)
     pending_from: int | None = None
     operation_id: str = ''
     review_from: int | None = None

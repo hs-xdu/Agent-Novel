@@ -241,6 +241,7 @@ class NovelService:
         start = state.pending_from or 1
         state.memory_status = 'updating'
         state.memory_error = ''
+        state.memory_diagnostic = {}
         state = self.repo.save(state, state.version)
         try:
             for n, chapter in sorted(state.chapters.items()):
@@ -266,6 +267,7 @@ class NovelService:
             state = self.repo.load(pid)
             state.memory_status = 'failed'
             state.memory_error = str(exc)[:1000]
+            state.memory_diagnostic = exc.diagnostic() if hasattr(exc,'diagnostic') else dict(code='budget' if '预算' in str(exc) else 'memory_review',details=type(exc).__name__)
             state = self.repo.save(state, state.version)
             log.warning('memory project=%s operation=%s failed=%s', pid, state.operation_id, type(exc).__name__)
         return state

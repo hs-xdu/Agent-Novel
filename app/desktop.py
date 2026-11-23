@@ -22,11 +22,13 @@ from llm.client import OpenAIWriter, DemoWriter
 from models.domain import Project, Memory, OutlinePreferences
 from app.desktop_theme import STYLE
 from storage.repository import Repository
+from llm.errors import ModelError
+from app.guidance import explain_error,memory_issue,chapter_checklist
 
 
 class Job(QThread):
     succeeded = Signal(object)
-    failed = Signal(str)
+    failed = Signal(object)
 
     def __init__(self, repo, settings, action, parent=None):
         super().__init__(parent)
@@ -49,7 +51,9 @@ class Job(QThread):
             key = self.settings.key.get_secret_value()
             if key:
                 message = message.replace(key, '[密钥已隐藏]')
-            self.failed.emit(message[:1500])
+            if isinstance(exc,ModelError):
+                self.failed.emit(ModelError(message[:1500],code=exc.code,details=exc.details,reference=exc.reference))
+            else:self.failed.emit(message[:1500])
 
 
 def button(text, callback, layout):
@@ -214,7 +218,12 @@ class Window(QMainWindow):
         for label, widget in [('章节',self.number),('名称',self.chapter_title),('分卷',self.volume),('目标字数',self.target)]: row.addWidget(QLabel(label)); row.addWidget(widget)
         button('加载章节', self.change_chapter, row); cl.addLayout(row)
         self.chapter_status=QLabel(); self.chapter_status.setWordWrap(True); cl.addWidget(self.chapter_status)
-        self.chapter_retry=button('重试整理记忆',self.retry_memory,cl)
+        guide_row=QHBoxLayout();cl.addLayout(guide_row)
+        self.chapter_retry=button('重试整理记忆',self.retry_memory,guide_row)
+        self.chapter_settings=button('打开模型设置',self.api_settings,guide_row)
+        self.chapter_details=button('查看失败详情',lambda:self.show_issue(memory_issue(self.state),memory=True),guide_row)
+        self.chapter_prerequisite=button('去确认设定与大纲',lambda:self.navigation.setCurrentRow(1),guide_row)
+        self.chapter_go_plan=button('去确认本章大纲',lambda:self.chapter_steps.setCurrentIndex(0),guide_row)
         self.chapter_steps=QTabWidget(); cl.addWidget(self.chapter_steps,1)
         planning=QWidget(); pl=QVBoxLayout(planning); self.chapter_steps.addTab(planning,'1  本章规划')
         self.chapter_context=QPlainTextEdit(); self.chapter_context.setReadOnly(True); self.chapter_context.setMaximumHeight(140); pl.addWidget(self.chapter_context)
@@ -224,14 +233,14 @@ class Window(QMainWindow):
         self.chapter_outline_detail=QComboBox(); self.chapter_outline_detail.addItems(['简明','标准','详细']); self.chapter_outline_detail.setCurrentText('详细'); row.addWidget(self.chapter_outline_detail)
         self.outline=QPlainTextEdit(); self.outline.setPlaceholderText('点击生成本章大纲，审阅后即可确认并生成正文。'); pl.addWidget(self.outline,1)
         row=QHBoxLayout(); pl.addLayout(row)
-        button('生成 / 重写本章大纲',self.generate_chapter_outline,row)
+        self.generate_outline_button=button('生成 / 重写本章大纲',self.generate_chapter_outline,row)
         button('保存大纲候选',self.save_chapter_outline,row)
-        button('确认大纲，生成正文',self.accept_outline_generate,row)
+        self.accept_generate_button=button('确认大纲，生成正文',self.accept_outline_generate,row)
         writing=QWidget(); cl=QVBoxLayout(writing); self.chapter_steps.addTab(writing,'2  正文审阅')
         self.body = QPlainTextEdit(); self.body.setPlaceholderText('确认章节大纲后生成正文。修改满意后，再确认定稿。'); cl.addWidget(self.body,1)
         row = QHBoxLayout(); cl.addLayout(row)
         button('保存草稿 / 章节信息', self.save_chapter, row)
-        button('AI 创作 / 整章重写', self.generate_chapter, row)
+        self.generate_body_button=button('AI 创作 / 整章重写', self.generate_chapter, row)
         button('确认定稿并更新记忆', self.finalize, row)
         self.rewrite_instruction = QLineEdit(); self.rewrite_instruction.setPlaceholderText('选择正文段落后填写修改要求'); cl.addWidget(self.rewrite_instruction)
         row = QHBoxLayout(); cl.addLayout(row); button('修改选中段落', self.rewrite, row)
@@ -281,28 +290,58 @@ class Window(QMainWindow):
         file.write(json.dumps(self.recovery,ensure_ascii=False).encode('utf-8'))
         if file.commit(): self.dirty = False; self.statusBar().showMessage('本地编辑缓存已自动保存（不会定稿或进入正式记忆）')
 
-    def submit(self, action, success=None, settings=None, done=None):
+    def submit(self, action, success=None, settings=None, done=None, message='操作已完成'):
         if self.job: self.statusBar().showMessage('请等待当前任务完成'); return
         self.stash()
         self.job = Job(self.repo,settings or self.settings,action,self)
         for i in range(self.tabs.count()): self.tabs.widget(i).setEnabled(False)
         self.projects.setEnabled(False); self.api_button.setEnabled(False)
         self.statusBar().showMessage('正在后台处理，页面仍可切换；请等待任务完成后关闭软件…')
+        outcome={'message':message}
         def completed(result):
             try:
                 if success: success(result)
                 else: self.refresh()
+                if hasattr(result,'memory_status') and result.memory_status!='synced' and ('记忆' in message or '定稿' in message):
+                    outcome['message']='正文已保存，记忆整理失败；请按指引处理后重试。'
+                    self.show_issue(memory_issue(result),memory=True)
             except Exception:
+                outcome['message']='结果显示未完成，请重新打开项目；已保存内容保留。'
                 QMessageBox.warning(self,'显示结果失败','结果处理未完成，请重新打开项目。已经保存的内容会保留。')
         self.job.succeeded.connect(completed)
-        self.job.failed.connect(lambda message: QMessageBox.warning(self,'操作未完成',message))
+        def failed(error):
+            outcome['message']='本次操作失败，已保存内容保留；请查看指引后重试。'
+            if isinstance(error,ModelError):self.show_issue(explain_error(str(error),error.diagnostic()))
+            else:QMessageBox.warning(self,'操作未完成',error)
+        self.job.failed.connect(failed)
         def finished():
             self.job.deleteLater(); self.job = None
             for i in range(self.tabs.count()): self.tabs.widget(i).setEnabled(True)
             self.projects.setEnabled(True); self.api_button.setEnabled(True)
-            self.statusBar().showMessage('任务已结束')
+            if self.state:self.update_chapter_guidance()
+            self.statusBar().showMessage(outcome['message'])
             if done: done()
         self.job.finished.connect(finished); self.job.start()
+
+    def show_issue(self,issue,memory=False):
+        dialog=QDialog(self);dialog.setWindowTitle(issue.title);dialog.resize(630,330)
+        layout=QVBoxLayout(dialog)
+        for text in [issue.title,('已定稿正文已保存，无需重新定稿。' if memory else '已保存的内容保留，本次失败不会覆盖正式版本。'),issue.explanation,'下一步：'+issue.next_step]:
+            label=QLabel(text);label.setWordWrap(True);layout.addWidget(label)
+        details=QPlainTextEdit(issue.details);details.setReadOnly(True);details.setVisible(False);layout.addWidget(details)
+        row=QHBoxLayout();layout.addLayout(row)
+        button('查看详情',lambda:details.setVisible(not details.isVisible()),row)
+        if memory:
+            def retry():dialog.accept();QTimer.singleShot(0,self.retry_memory)
+            button('重试整理记忆',retry,row)
+        if issue.settings:
+            def settings():dialog.accept();QTimer.singleShot(0,self.api_settings)
+            button('打开模型设置',settings,row)
+        if memory:
+            def review():dialog.accept();self.navigation.setCurrentRow(3)
+            button('查看小说记忆',review,row)
+        button('稍后处理',dialog.accept,row)
+        dialog.exec()
 
     def sync(self, action):
         if self.job or not self.state: return None
@@ -354,7 +393,7 @@ class Window(QMainWindow):
         for number in sorted(self.state.memory_candidates): self.memory_pick.addItem(f'第{number}章 · 待处理候选',(number,True))
         self.memory_pick.blockSignals(False); self.load_memory()
         memory_label={'synced':'已同步','pending':'待更新','updating':'更新中','failed':'需重试'}[self.state.memory_status]
-        self.summary.setText(f'{self.state.project.title}  ·  已定稿 {sum(bool(c.final) for c in self.state.chapters.values())} 章  ·  记忆{memory_label}  {self.state.memory_error}')
+        self.summary.setText(f'{self.state.project.title}  ·  已定稿 {sum(bool(c.final) for c in self.state.chapters.values())} 章  ·  记忆{memory_label}')
         self.loading = False
         self.refresh_chapter_list()
 
@@ -403,14 +442,35 @@ class Window(QMainWindow):
         elif chapter and chapter.draft: text='正文草稿 · 已保存。审阅满意后确认定稿。'
         elif outline and outline.approved: text='本章大纲已确认，可以生成正文。'
         else: text='先确定本章目标，再生成大纲。满意后确认大纲并生成正文。'
-        self.chapter_status.setText(text); self.chapter_retry.setVisible(self.state.memory_status!='synced')
+        self.update_chapter_guidance()
         self.loading = False
+
+    def update_chapter_guidance(self):
+        if not self.state:return
+        text,ready=chapter_checklist(self.state,self.chapter_number)
+        failed=self.state.memory_status!='synced'
+        missing=[name for key,name in [('settings','基础设定'),('main','全书大纲'),(f'volume:{self.volume.value()}','当前分卷大纲')] if not self.state.documents.get(key) or not self.state.documents[key].approved]
+        if failed:
+            issue=memory_issue(self.state)
+            text+='\n正文已保存，记忆整理未成功。'+issue.explanation+'\n'+issue.next_step
+        elif missing:text+='\n还需确认：'+'、'.join(missing)+'。可点击下方按钮前往。'
+        self.chapter_status.setText(text)
+        self.chapter_retry.setVisible(failed);self.chapter_details.setVisible(failed)
+        self.chapter_settings.setVisible(failed and memory_issue(self.state).settings)
+        self.chapter_prerequisite.setVisible(bool(missing));self.chapter_go_plan.setVisible(not ready and not failed and not missing)
+        enabled=not self.job
+        self.generate_body_button.setEnabled(ready and not missing and enabled)
+        self.generate_body_button.setToolTip('先完成前文记忆同步并确认本章大纲，再生成正文。' if not ready else '生成正文草稿，正式版本保持保留。')
+        self.generate_outline_button.setEnabled(not failed and not missing and enabled)
+        self.accept_generate_button.setEnabled(not failed and not missing and enabled)
 
     def refresh_chapter_list(self):
         self.chapter_list.blockSignals(True); self.chapter_list.clear()
         selected=-1
         for index,(n,c) in enumerate(sorted(self.state.chapters.items())):
-            label='已定稿' if c.final else ('正文草稿' if c.draft else '待创作')
+            doc=self.state.documents.get(f'outline:{n}')
+            pending=self.state.pending_from
+            label=('已定稿·记忆待更新' if self.state.memory_status!='synced' and n>=(pending or 1) else '已完成') if c.final else ('正文草稿' if c.draft else ('大纲已确认' if doc and doc.approved else '大纲待确认' if doc and doc.draft else '待规划'))
             self.chapter_list.addItem(f'第{c.volume}卷 · 第{n}章\n{c.title or "未命名"} · {label}')
             self.chapter_list.item(index).setData(Qt.ItemDataRole.UserRole,n)
             if n==self.chapter_number: selected=index
@@ -440,7 +500,7 @@ class Window(QMainWindow):
     def propose_plan(self):
         if not self.state:return
         pid,version,volume,count=self.state.project.project_id,self.state.version,self.volume.value(),self.plan_count.value()
-        self.submit(lambda s:s.propose_chapters(pid,version,volume,count))
+        self.submit(lambda s:s.propose_chapters(pid,version,volume,count),message='章节清单建议已生成，请审阅确认。')
 
     def review_plan(self):
         if not self.state or self.job:return
@@ -463,7 +523,7 @@ class Window(QMainWindow):
         def success(result):
             self.recovery.get('chapter_outlines',{}).pop(str(n),None);self.recovery.get('documents',{}).pop(f'outline:{n}',None)
             self.state=result;self.refresh();self.chapter_steps.setCurrentIndex(0);self.dirty=True;self.stash()
-        self.submit(lambda s:s.generate_document(pid,version,f'outline:{n}',goal,words,detail),success)
+        self.submit(lambda s:s.generate_document(pid,version,f'outline:{n}',goal,words,detail),success,message='本章大纲已生成并保存为候选，请审阅。')
 
     def save_chapter_outline(self):
         self.stash()
@@ -501,7 +561,7 @@ class Window(QMainWindow):
             self.recovery.get('documents',{}).pop(key,None)
             if key.startswith('outline:'):self.recovery.get('chapter_outlines',{}).pop(key.split(':')[1],None)
             self.state=result; self.refresh(); self.dirty=True; self.stash()
-        self.submit(lambda s:s.generate_document(pid,version,key,idea,words,detail),success)
+        self.submit(lambda s:s.generate_document(pid,version,key,idea,words,detail),success,message='候选内容已生成并保存，请审阅后确认生效。')
 
     def save_chapter(self):
         if not self.state: return None
@@ -514,13 +574,13 @@ class Window(QMainWindow):
         if not self.save_chapter(): return
         pid, version, n, extra, target = self.state.project.project_id,self.state.version,self.chapter_number,self.extra.text(),self.target.value()
         def success(result): self.recovery.get('chapters',{}).pop(str(n),None); self.state=result; self.refresh(); self.chapter_steps.setCurrentIndex(1); self.dirty=True; self.stash()
-        self.submit(lambda s:s.generate_chapter(pid,version,n,extra,target),success)
+        self.submit(lambda s:s.generate_chapter(pid,version,n,extra,target),success,message='正文草稿已生成并保存，请审阅。')
 
     def finalize(self):
         if not self.confirm('确认定稿当前正文并自动更新记忆？'): return
         if not self.save_chapter(): return
         pid,version,n=self.state.project.project_id,self.state.version,self.chapter_number
-        self.submit(lambda s:s.finalize(pid,version,n))
+        self.submit(lambda s:s.finalize(pid,version,n),message='本章已定稿，记忆已同步，可以开始下一章。')
 
     def rewrite(self):
         if not self.state: return
@@ -537,7 +597,7 @@ class Window(QMainWindow):
             buttons.accepted.connect(dialog.accept); buttons.rejected.connect(dialog.reject)
             if dialog.exec()==QDialog.DialogCode.Accepted:
                 self.body.setPlainText(NovelService.apply_rewrite(self.body.toPlainText(),original,start,end,editor.toPlainText()))
-        self.submit(lambda s:s.rewrite(pid,version,n,original,start,end,request),success)
+        self.submit(lambda s:s.rewrite(pid,version,n,original,start,end,request),success,message='修改建议已生成，应用后请保存草稿。')
 
     def load_memory(self):
         if not self.state or not self.memory_pick.currentData(): self.memory_text.clear(); return
@@ -551,7 +611,7 @@ class Window(QMainWindow):
         if result: self.state=result; self.refresh()
 
     def retry_memory(self):
-        if self.state: self.submit(lambda s:s.retry_memory(self.state.project.project_id))
+        if self.state:self.submit(lambda s:s.retry_memory(self.state.project.project_id),message='记忆已同步，可以继续创作。')
 
     def search(self):
         if self.state:
