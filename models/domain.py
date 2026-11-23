@@ -120,11 +120,23 @@ class OutlinePreferences(Model):
                    detail={'main':'简明','volume':'标准','outline':'详细'}.get(kind,'简明'))
 
 
+class PlannedChapter(Model):
+    number: int = Field(ge=1)
+    title: str = Field(min_length=1)
+    goal: str = Field(min_length=1)
+
+
+class ChapterPlan(Model):
+    chapters: list[PlannedChapter] = Field(min_length=1, max_length=30)
+
+
 class State(Model):
     schema_version: Literal[1] = 1
     version: str = ''
     project: Project
     documents: dict[str, Document] = Field(default_factory=dict)
+    volume_plan_candidates: dict[int, ChapterPlan] = Field(default_factory=dict)
+    chapter_goals: dict[int, str] = Field(default_factory=dict)
     outline_preferences: dict[str, OutlinePreferences] = Field(default_factory=dict)
     chapters: dict[int, Chapter] = Field(default_factory=dict)
     memories: dict[int, MemoryRecord] = Field(default_factory=dict)

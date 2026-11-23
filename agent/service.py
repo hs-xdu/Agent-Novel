@@ -6,8 +6,8 @@ from contextlib import asynccontextmanager
 from uuid import uuid4
 
 from llm.client import Writer
-from memory.context import build_context, encode, search
-from models.domain import Chapter, Document, Memory, MemoryRecord, Project, Settings, State, OutlinePreferences
+from memory.context import build_context, build_memory_context, encode, search
+from models.domain import Chapter, Document, Memory, MemoryRecord, Project, Settings, State, OutlinePreferences, ChapterPlan
 from storage.repository import Repository, ConflictError
 
 log = logging.getLogger(__name__)
@@ -76,15 +76,26 @@ class NovelService:
             if task in ('volume', 'outline'):
                 parents.append('main')
             if task == 'outline':
-                chapter = state.chapters.get(int(key.split(':')[1]))
+                number=int(key.split(':')[1])
+                chapter = state.chapters.get(number)
                 if not chapter:
-                    raise ValueError('请先保存章节信息')
+                    previous=[c for n,c in state.chapters.items() if n<number]
+                    volume=max(previous,key=lambda c:c.number).volume if previous else 1
+                    chapter=Chapter(number=number,volume=volume)
+                    state.chapters[number]=chapter
+                if state.memory_status!='synced':
+                    raise ValueError('正文已保存，但记忆尚未同步；请先重试整理记忆，再生成下一章大纲')
                 parents.append(f'volume:{chapter.volume}')
             if any(not state.documents.get(k) or not state.documents[k].approved for k in parents):
                 raise ValueError('请先确认上级设定和大纲')
             data = dict(project=state.project.model_dump(), key=key, request=idea,
                                   parents={k: state.documents[k].approved for k in parents},
                                   existing=state.documents.get(key, Document()).approved)
+            if task=='outline':
+                data['chapter_goal']=state.chapter_goals.get(number,'')
+                data['previous_chapters']=[dict(number=n,summary=m.data.summary) for n,m in sorted(state.memories.items()) if n<number][-3:]
+                previous=state.chapters.get(number-1)
+                data['previous_ending']=previous.final[-1000:] if previous else ''
             if task != 'settings':
                 previous = state.outline_preferences.get(key, OutlinePreferences.for_kind(task))
                 preference = OutlinePreferences(target_words=target_words if target_words is not None else previous.target_words,
@@ -100,6 +111,41 @@ class NovelService:
             result = (await self.writer.structured(task, context, Settings)).model_dump_json(indent=2) if task == 'settings' else await self.writer.text(task, context)
             state.documents.setdefault(key, Document()).draft = result
             return self.repo.save(state, expected)
+
+    def begin_chapter(self,pid,expected,volume=None):
+        state=self._editable(pid,expected)
+        n=1
+        while n in state.chapters and state.chapters[n].final: n+=1
+        if n in state.chapters: return state,n
+        chosen=volume or (state.chapters[n-1].volume if n>1 else 1)
+        missing=[label for key,label in [('settings','基础设定'),('main','全书大纲'),(f'volume:{chosen}',f'第{chosen}卷大纲')] if not state.documents.get(key) or not state.documents[key].approved]
+        if missing: raise ValueError('请先到“设定与大纲”确认：'+'、'.join(missing))
+        state.chapters[n]=Chapter(number=n,volume=chosen)
+        return self.repo.save(state,expected),n
+
+    async def propose_chapters(self,pid,expected,volume,count=5):
+        if not 1<=count<=30: raise ValueError('每次规划 1～30 章')
+        async with self.operation(pid):
+            state=self.repo.load(pid)
+            if state.version!=expected: raise ConflictError('项目已更新，请重新加载')
+            parents=['settings','main',f'volume:{volume}']
+            if any(not state.documents.get(k) or not state.documents[k].approved for k in parents): raise ValueError('请先确认基础设定、全书和本卷大纲')
+            first=max(state.chapters,default=0)+1
+            plan=await self.writer.structured('plan',encode(dict(first_number=first,count=count,parents={k:state.documents[k].approved for k in parents})),ChapterPlan)
+            if [c.number for c in plan.chapters]!=list(range(first,first+count)): raise ValueError('章节清单编号不连续或数量不符，请重新生成')
+            state.volume_plan_candidates[volume]=plan
+            return self.repo.save(state,expected)
+
+    def accept_chapters(self,pid,expected,volume,text):
+        state=self._editable(pid,expected); plan=ChapterPlan.model_validate_json(text)
+        numbers=[c.number for c in plan.chapters]; first=max(state.chapters,default=0)+1
+        if numbers!=list(range(first,first+len(numbers))): raise ValueError('章节清单必须从下一空编号开始连续排列，不能覆盖已有章节')
+        if not state.documents.get(f'volume:{volume}') or not state.documents[f'volume:{volume}'].approved: raise ValueError('请先确认本卷大纲')
+        for item in plan.chapters:
+            state.chapters[item.number]=Chapter(number=item.number,volume=volume,title=item.title)
+            state.chapter_goals[item.number]=item.goal
+        state.volume_plan_candidates.pop(volume,None)
+        return self.repo.save(state,expected)
 
     def save_chapter(self, pid, expected, number, title, volume, body):
         state = self._editable(pid, expected)
@@ -202,9 +248,8 @@ class NovelService:
                     continue
                 candidate = state.memory_candidates.get(n)
                 if candidate is None:
-                    context = json.loads(build_context(state, n))
-                    context.update(body=chapter.final, revision=chapter.revision)
-                    candidate = await self.writer.structured('memory', encode(context), Memory)
+                    context = build_memory_context(state,n)
+                    candidate = await self.writer.structured('memory', context, Memory)
                     state.memory_candidates[n] = candidate
                     state = self.repo.save(state, state.version)
                 self._validate_memory(state, n, candidate)

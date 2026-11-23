@@ -137,3 +137,31 @@ def test_outline_options_are_per_document_and_restore(window,qtbot):
     assert second.outline_options.isHidden()
     second.navigation.setCurrentRow(2)
     assert second.tabs.currentIndex()==2 and second.page_title.text()=='章节创作'
+
+
+def test_guided_chapter_flow_stays_in_chapter_workspace(window,qtbot):
+    create(window);window.confirm=lambda _:True
+    def wait():qtbot.waitUntil(lambda:window.job is None,timeout=30000)
+    for kind in ['settings','main','volume']:
+        window.kind.setCurrentIndex(window.kind.findData(kind));window.generate_document();wait();window.save_document(True)
+    window.navigation.setCurrentRow(2);window.begin_next()
+    assert window.state.chapters[1].volume==1
+    window.generate_chapter_outline();wait()
+    assert window.outline.toPlainText()
+    window.accept_outline_generate();wait()
+    assert window.chapter_steps.currentIndex()==1 and window.body.toPlainText()
+    window.finalize();wait()
+    assert window.state.memory_status=='synced'
+    window.begin_next()
+    assert window.chapter_number==2 and 2 in window.state.chapters
+    window.generate_chapter_outline();wait()
+    assert window.outline.toPlainText() and window.navigation.currentRow()==2
+
+
+def test_chapter_outline_edit_is_shared_with_management_editor(window,qtbot):
+    create(window)
+    window.kind.setCurrentIndex(window.kind.findData('outline'))
+    window.document.setPlainText('从管理页编辑的大纲')
+    assert window.outline.toPlainText()=='从管理页编辑的大纲'
+    window.outline.setPlainText('从章节页编辑的大纲')
+    assert window.document.toPlainText()=='从章节页编辑的大纲'

@@ -9,7 +9,8 @@ from openai import AsyncOpenAI, APIConnectionError, APIStatusError, APITimeoutEr
 from pydantic import BaseModel, ValidationError
 import tiktoken
 
-from models.domain import Settings, Memory
+from models.domain import Settings, Memory, ChapterPlan
+from memory.budget import request_cost, input_budget
 from prompts import SYSTEM, TASKS
 
 T = TypeVar('T', bound=BaseModel)
@@ -45,9 +46,8 @@ class OpenAIWriter:
     async def _request(self, task, context, schema=None):
         client = self._client()
         output_limit = int(os.getenv('NOVEL_OUTPUT_TOKENS', '6000'))
-        budget = int(os.getenv('NOVEL_CONTEXT_TOKENS', '24000')) - output_limit
-        token_count = len(tiktoken.get_encoding('cl100k_base').encode(SYSTEM + TASKS[task] + context, disallowed_special=()))
-        if budget < 1 or token_count * 2 > budget:
+        budget = input_budget()
+        if budget < 1 or request_cost(task,context,schema,self.api_mode) > budget:
             raise ModelError('请求超出上下文预算，请精简输入或提高上下文预算')
         for attempt in range(3):
             started = time.monotonic()
@@ -113,6 +113,9 @@ class DemoWriter:
 
     async def structured(self, task, context, schema):
         await asyncio.sleep(0)
+        if schema is ChapterPlan:
+            data=json.loads(context)
+            return ChapterPlan(chapters=[dict(number=n,title=f'旧城线索{n}',goal='推进调查，发现新的线索') for n in range(data['first_number'],data['first_number']+data['count'])])
         if schema is Settings:
             return Settings(worldbuilding='旧城中，记忆可被封存在铜器里。', rules=['铜器只能保存持有者亲历的记忆。'],
                             main_conflict='林舟追查失踪家人的来信。',

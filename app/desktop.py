@@ -56,7 +56,7 @@ def button(text, callback, layout):
     widget = QPushButton(text)
     widget.clicked.connect(lambda: callback())
     layout.addWidget(widget)
-    if text.startswith('AI ') or text in ('确认生效','保存并应用','确认定稿并更新记忆'):
+    if text.startswith('AI ') or text in ('确认生效','保存并应用','确认定稿并更新记忆','确认大纲，生成正文'):
         widget.setProperty('primary', True)
     return widget
 
@@ -197,17 +197,38 @@ class Window(QMainWindow):
         row = QHBoxLayout(); editor_layout.addLayout(row)
         self.document_count=QLabel('0 字符'); self.document_count.setObjectName('muted'); row.addWidget(self.document_count); row.addStretch()
         button('保存候选', lambda: self.save_document(False), row); button('确认生效', lambda: self.save_document(True), row)
-        chapters = QWidget(); cl = QVBoxLayout(chapters); self.tabs.addTab(chapters, '章节创作')
+        chapters = QWidget(); shell=QHBoxLayout(chapters); self.tabs.addTab(chapters, '章节创作')
+        sidebar=QWidget(); sidebar.setMaximumWidth(215); sidebar.setMinimumWidth(175); side=QVBoxLayout(sidebar); shell.addWidget(sidebar)
+        side.addWidget(QLabel('分卷与章节'))
+        self.chapter_list=QListWidget(); side.addWidget(self.chapter_list,1)
+        self.next_button=button('开始下一章',self.begin_next,side)
+        self.plan_count=spin(5,30); side.addWidget(QLabel('本次建议规划章数')); side.addWidget(self.plan_count)
+        button('AI 建议本卷章节清单',self.propose_plan,side)
+        button('审阅并建立章节清单',self.review_plan,side)
+        button('规划下一卷',self.plan_next_volume,side)
+        stage=QWidget(); cl=QVBoxLayout(stage); shell.addWidget(stage,1)
         cl.setContentsMargins(20,20,20,20); cl.setSpacing(12)
         row = QHBoxLayout(); self.number = spin(); self.volume = spin(); self.chapter_title = QLineEdit(); self.target = spin(2000,20000)
         self.number.setMaximumWidth(90); self.volume.setMaximumWidth(90); self.target.setMaximumWidth(120)
         self.chapter_title.setPlaceholderText('章节名称')
         for label, widget in [('章节',self.number),('名称',self.chapter_title),('分卷',self.volume),('目标字数',self.target)]: row.addWidget(QLabel(label)); row.addWidget(widget)
         button('加载章节', self.change_chapter, row); cl.addLayout(row)
-        outline_box=QGroupBox('查看本章正式大纲'); outline_box.setCheckable(True); outline_box.setChecked(False); box_layout=QVBoxLayout(outline_box)
-        self.outline = QPlainTextEdit(); self.outline.setReadOnly(True); self.outline.setMaximumHeight(110); box_layout.addWidget(self.outline); self.outline.hide(); outline_box.toggled.connect(self.outline.setVisible); cl.addWidget(outline_box)
-        self.extra = QLineEdit(); self.extra.setPlaceholderText('额外创作要求'); cl.addWidget(self.extra)
-        self.body = QPlainTextEdit(); self.body.setPlaceholderText('在这里写下你的故事。AI 生成后，可以继续编辑或选中段落修改。'); cl.addWidget(self.body,1)
+        self.chapter_status=QLabel(); self.chapter_status.setWordWrap(True); cl.addWidget(self.chapter_status)
+        self.chapter_retry=button('重试整理记忆',self.retry_memory,cl)
+        self.chapter_steps=QTabWidget(); cl.addWidget(self.chapter_steps,1)
+        planning=QWidget(); pl=QVBoxLayout(planning); self.chapter_steps.addTab(planning,'1  本章规划')
+        self.chapter_context=QPlainTextEdit(); self.chapter_context.setReadOnly(True); self.chapter_context.setMaximumHeight(140); pl.addWidget(self.chapter_context)
+        self.extra = QLineEdit(); self.extra.setPlaceholderText('本章目标 / 额外要求，可直接让 AI 提出建议'); pl.addWidget(self.extra)
+        row=QHBoxLayout(); pl.addLayout(row); row.addWidget(QLabel('大纲目标字数'))
+        self.chapter_outline_words=spin(400,6000); self.chapter_outline_words.setMinimum(200); row.addWidget(self.chapter_outline_words)
+        self.chapter_outline_detail=QComboBox(); self.chapter_outline_detail.addItems(['简明','标准','详细']); self.chapter_outline_detail.setCurrentText('详细'); row.addWidget(self.chapter_outline_detail)
+        self.outline=QPlainTextEdit(); self.outline.setPlaceholderText('点击生成本章大纲，审阅后即可确认并生成正文。'); pl.addWidget(self.outline,1)
+        row=QHBoxLayout(); pl.addLayout(row)
+        button('生成 / 重写本章大纲',self.generate_chapter_outline,row)
+        button('保存大纲候选',self.save_chapter_outline,row)
+        button('确认大纲，生成正文',self.accept_outline_generate,row)
+        writing=QWidget(); cl=QVBoxLayout(writing); self.chapter_steps.addTab(writing,'2  正文审阅')
+        self.body = QPlainTextEdit(); self.body.setPlaceholderText('确认章节大纲后生成正文。修改满意后，再确认定稿。'); cl.addWidget(self.body,1)
         row = QHBoxLayout(); cl.addLayout(row)
         button('保存草稿 / 章节信息', self.save_chapter, row)
         button('AI 创作 / 整章重写', self.generate_chapter, row)
@@ -224,6 +245,9 @@ class Window(QMainWindow):
         self.history = QPlainTextEdit(); self.history.setReadOnly(True); ml.addWidget(self.history)
         self.timer = QTimer(self); self.timer.setSingleShot(True); self.timer.setInterval(1500); self.timer.timeout.connect(self.stash)
         self.document.textChanged.connect(self.edited); self.body.textChanged.connect(self.edited)
+        self.outline.textChanged.connect(self.edited); self.chapter_outline_words.valueChanged.connect(self.edited); self.chapter_outline_detail.currentTextChanged.connect(self.edited)
+        self.document.textChanged.connect(lambda:self.link_outline(True))
+        self.outline.textChanged.connect(lambda:self.link_outline(False))
         self.document.textChanged.connect(lambda:self.document_count.setText(f'{len("".join(self.document.toPlainText().split()))} 字符'))
         self.outline_words.valueChanged.connect(self.edited); self.outline_detail.currentTextChanged.connect(self.edited)
         for field in list(self.project_fields.values()) + [self.chapter_title,self.volume,self.extra,self.idea]:
@@ -231,17 +255,24 @@ class Window(QMainWindow):
         self.projects.currentIndexChanged.connect(self.select_project)
         self.kind.currentIndexChanged.connect(self.change_document); self.doc_index.valueChanged.connect(self.change_document)
         self.memory_pick.currentIndexChanged.connect(self.load_memory)
+        self.chapter_list.currentRowChanged.connect(self.choose_chapter)
         self.refresh_projects()
 
     def edited(self):
         if not self.loading and self.state:
             self.dirty = True; self.timer.start()
 
+    def link_outline(self,from_document):
+        if self.loading or self.doc_key!=f'outline:{self.chapter_number}':return
+        source,target=(self.document,self.outline) if from_document else (self.outline,self.document)
+        target.blockSignals(True);target.setPlainText(source.toPlainText());target.blockSignals(False)
+
     def stash(self):
         if not self.state or self.loading or not self.dirty: return
         self.recovery.setdefault('documents',{})[self.doc_key] = self.document.toPlainText()
         self.recovery.setdefault('outline_preferences',{})[self.doc_key] = dict(target_words=self.outline_words.value(),detail=self.outline_detail.currentText(),request=self.idea.text())
         self.recovery.setdefault('chapters',{})[str(self.chapter_number)] = dict(body=self.body.toPlainText(), title=self.chapter_title.text(), volume=self.volume.value(), extra=self.extra.text())
+        self.recovery.setdefault('chapter_outlines',{})[str(self.chapter_number)] = dict(text=self.outline.toPlainText(),words=self.chapter_outline_words.value(),detail=self.chapter_outline_detail.currentText())
         self.recovery['project'] = self.project_values()
         directory = self.repo.project_path(self.state.project.project_id)
         file = QSaveFile(str(directory / 'desktop-drafts.json'))
@@ -325,6 +356,7 @@ class Window(QMainWindow):
         memory_label={'synced':'已同步','pending':'待更新','updating':'更新中','failed':'需重试'}[self.state.memory_status]
         self.summary.setText(f'{self.state.project.title}  ·  已定稿 {sum(bool(c.final) for c in self.state.chapters.values())} 章  ·  记忆{memory_label}  {self.state.memory_error}')
         self.loading = False
+        self.refresh_chapter_list()
 
     def change_document(self):
         if self.loading: return
@@ -334,7 +366,9 @@ class Window(QMainWindow):
         if not self.state: return
         kind = self.kind.currentData(); self.doc_key = kind if kind in ('settings','main') else f'{kind}:{self.doc_index.value()}'
         doc = self.state.documents.get(self.doc_key)
-        self.document.blockSignals(True); self.document.setPlainText(self.recovery.get('documents',{}).get(self.doc_key, (doc.draft or doc.approved) if doc else '')); self.document.blockSignals(False)
+        draft=self.recovery.get('documents',{}).get(self.doc_key,(doc.draft or doc.approved) if doc else '')
+        if kind=='outline':draft=self.recovery.get('chapter_outlines',{}).get(str(self.doc_index.value()),{}).get('text',draft)
+        self.document.blockSignals(True); self.document.setPlainText(draft); self.document.blockSignals(False)
         preference=self.state.outline_preferences.get(self.doc_key,OutlinePreferences.for_kind(kind)).model_dump()
         preference.update(self.recovery.get('outline_preferences',{}).get(self.doc_key,{}))
         for field in [self.outline_words,self.outline_detail,self.idea]: field.blockSignals(True)
@@ -356,7 +390,94 @@ class Window(QMainWindow):
         self.chapter_title.setText(draft.get('title',chapter.title if chapter else ''))
         self.volume.setValue(draft.get('volume',chapter.volume if chapter else 1)); self.extra.setText(draft.get('extra',''))
         outline = self.state.documents.get(f'outline:{self.chapter_number}')
-        self.outline.setPlainText(outline.approved if outline else '请先保存章节信息，再确认本章大纲。'); self.loading = False
+        cached=self.recovery.get('chapter_outlines',{}).get(str(self.chapter_number),{})
+        prefs=self.state.outline_preferences.get(f'outline:{self.chapter_number}',OutlinePreferences.for_kind('outline'))
+        self.outline.setPlainText(cached.get('text',(outline.draft or outline.approved) if outline else ''))
+        self.chapter_outline_words.setValue(cached.get('words',prefs.target_words)); self.chapter_outline_detail.setCurrentText(cached.get('detail',prefs.detail))
+        previous=self.state.memories.get(self.chapter_number-1)
+        volume_doc=self.state.documents.get(f'volume:{self.volume.value()}')
+        ending=self.state.chapters.get(self.chapter_number-1)
+        self.chapter_context.setPlainText('本卷目标：\n'+(volume_doc.approved[:900] if volume_doc else '请先确认当前分卷大纲')+'\n\n前章摘要：\n'+(previous.data.summary if previous else '暂无已同步摘要')+'\n\n前章结尾：\n'+(ending.final[-500:] if ending else '这是故事的开端。')+'\n\n计划目标：'+self.state.chapter_goals.get(self.chapter_number,''))
+        if self.state.memory_status!='synced': text='正文已保存，记忆整理未完成。请重试整理记忆，完成前暂停 AI 生成。'+self.state.memory_error
+        elif chapter and chapter.final: text='本章已定稿，记忆已同步。可以开始下一章；修改正文后需再次确认定稿。'
+        elif chapter and chapter.draft: text='正文草稿 · 已保存。审阅满意后确认定稿。'
+        elif outline and outline.approved: text='本章大纲已确认，可以生成正文。'
+        else: text='先确定本章目标，再生成大纲。满意后确认大纲并生成正文。'
+        self.chapter_status.setText(text); self.chapter_retry.setVisible(self.state.memory_status!='synced')
+        self.loading = False
+
+    def refresh_chapter_list(self):
+        self.chapter_list.blockSignals(True); self.chapter_list.clear()
+        selected=-1
+        for index,(n,c) in enumerate(sorted(self.state.chapters.items())):
+            label='已定稿' if c.final else ('正文草稿' if c.draft else '待创作')
+            self.chapter_list.addItem(f'第{c.volume}卷 · 第{n}章\n{c.title or "未命名"} · {label}')
+            self.chapter_list.item(index).setData(Qt.ItemDataRole.UserRole,n)
+            if n==self.chapter_number: selected=index
+        self.chapter_list.setCurrentRow(selected); self.chapter_list.blockSignals(False)
+        n=1
+        while n in self.state.chapters and self.state.chapters[n].final: n+=1
+        self.next_button.setText(f'继续第{n}章' if n in self.state.chapters else f'开始第{n}章')
+
+    def choose_chapter(self,index):
+        if self.loading or index<0 or self.job: return
+        self.stash(); self.number.setValue(self.chapter_list.item(index).data(Qt.ItemDataRole.UserRole)); self.load_chapter()
+        self.chapter_steps.setCurrentIndex(1 if self.body.toPlainText() else 0)
+
+    def begin_next(self):
+        if not self.state or self.job:return
+        self.stash()
+        result=self.sync(lambda s:s.begin_chapter(self.state.project.project_id,self.state.version,self.volume.value()))
+        if result:
+            self.state,n=result; self.number.setValue(n); self.refresh(); self.chapter_steps.setCurrentIndex(0)
+
+    def plan_next_volume(self):
+        if not self.state or self.job:return
+        self.stash();self.navigation.setCurrentRow(1)
+        self.kind.setCurrentIndex(self.kind.findData('volume'));self.doc_index.setValue(self.volume.value()+1)
+        self.statusBar().showMessage('先生成并确认下一卷大纲；回到章节页后，将分卷改为新卷号，再开始下一章。')
+
+    def propose_plan(self):
+        if not self.state:return
+        pid,version,volume,count=self.state.project.project_id,self.state.version,self.volume.value(),self.plan_count.value()
+        self.submit(lambda s:s.propose_chapters(pid,version,volume,count))
+
+    def review_plan(self):
+        if not self.state or self.job:return
+        volume=self.volume.value(); plan=self.state.volume_plan_candidates.get(volume)
+        if not plan: self.statusBar().showMessage('请先生成本卷章节清单建议');return
+        dialog=QDialog(self);dialog.resize(700,500);dialog.setWindowTitle('审阅章节清单 · 确认后建立待创作章节')
+        layout=QVBoxLayout(dialog);layout.addWidget(QLabel('可调整名称与目标；编号必须连续，已有章节不会被覆盖。'))
+        editor=QPlainTextEdit(plan.model_dump_json(indent=2));layout.addWidget(editor)
+        controls=QDialogButtonBox(QDialogButtonBox.StandardButton.Ok|QDialogButtonBox.StandardButton.Cancel);layout.addWidget(controls)
+        controls.accepted.connect(dialog.accept);controls.rejected.connect(dialog.reject)
+        if dialog.exec()==QDialog.DialogCode.Accepted:
+            result=self.sync(lambda s:s.accept_chapters(self.state.project.project_id,self.state.version,volume,editor.toPlainText()))
+            if result:self.state=result;self.refresh()
+
+    def generate_chapter_outline(self):
+        self.stash()
+        if not self.save_chapter():return
+        pid,version,n=self.state.project.project_id,self.state.version,self.chapter_number
+        goal,words,detail=self.extra.text(),self.chapter_outline_words.value(),self.chapter_outline_detail.currentText()
+        def success(result):
+            self.recovery.get('chapter_outlines',{}).pop(str(n),None);self.recovery.get('documents',{}).pop(f'outline:{n}',None)
+            self.state=result;self.refresh();self.chapter_steps.setCurrentIndex(0);self.dirty=True;self.stash()
+        self.submit(lambda s:s.generate_document(pid,version,f'outline:{n}',goal,words,detail),success)
+
+    def save_chapter_outline(self):
+        self.stash()
+        if not self.save_chapter():return
+        result=self.sync(lambda s:s.save_document(self.state.project.project_id,self.state.version,f'outline:{self.chapter_number}',self.outline.toPlainText()))
+        if result:self.state=result;self.refresh()
+
+    def accept_outline_generate(self):
+        if not self.state or not self.outline.toPlainText().strip():self.statusBar().showMessage('请先生成或填写本章大纲');return
+        if not self.confirm('确认采用当前大纲并生成正文草稿？已有正文和正式版本会保留。'):return
+        self.stash();text=self.outline.toPlainText()
+        if not self.save_chapter():return
+        result=self.sync(lambda s:s.save_document(self.state.project.project_id,self.state.version,f'outline:{self.chapter_number}',text,True))
+        if result:self.state=result;self.generate_chapter()
 
     def project_values(self): return {key: field.value() if isinstance(field,QSpinBox) else field.text() for key,field in self.project_fields.items()}
     def save_project(self):
@@ -366,18 +487,25 @@ class Window(QMainWindow):
 
     def save_document(self, approve=False):
         if not self.state or (approve and not self.confirm('确认将当前文档设为正式版本？')): return
+        self.stash()
         result = self.sync(lambda s:s.save_document(self.state.project.project_id,self.state.version,self.doc_key,self.document.toPlainText(),approve))
-        if result: self.recovery.get('documents',{}).pop(self.doc_key,None); self.state=result; self.dirty=True; self.stash(); self.refresh()
+        if result:
+            if self.doc_key==f'outline:{self.chapter_number}':self.outline.setPlainText(self.document.toPlainText())
+            self.recovery.get('documents',{}).pop(self.doc_key,None); self.state=result; self.dirty=True; self.stash(); self.refresh()
 
     def generate_document(self):
         if not self.state: return
         pid, version, key, idea = self.state.project.project_id,self.state.version,self.doc_key,self.idea.text()
         words,detail=self.outline_words.value(),self.outline_detail.currentText()
-        def success(result): self.recovery.get('documents',{}).pop(key,None); self.state=result; self.refresh(); self.dirty=True; self.stash()
+        def success(result):
+            self.recovery.get('documents',{}).pop(key,None)
+            if key.startswith('outline:'):self.recovery.get('chapter_outlines',{}).pop(key.split(':')[1],None)
+            self.state=result; self.refresh(); self.dirty=True; self.stash()
         self.submit(lambda s:s.generate_document(pid,version,key,idea,words,detail),success)
 
     def save_chapter(self):
         if not self.state: return None
+        self.stash()
         result = self.sync(lambda s:s.save_chapter(self.state.project.project_id,self.state.version,self.chapter_number,self.chapter_title.text(),self.volume.value(),self.body.toPlainText()))
         if result: self.state=result; self.recovery.get('chapters',{}).pop(str(self.chapter_number),None); self.refresh(); self.dirty=True; self.stash()
         return result
@@ -385,7 +513,7 @@ class Window(QMainWindow):
     def generate_chapter(self):
         if not self.save_chapter(): return
         pid, version, n, extra, target = self.state.project.project_id,self.state.version,self.chapter_number,self.extra.text(),self.target.value()
-        def success(result): self.recovery.get('chapters',{}).pop(str(n),None); self.state=result; self.refresh(); self.dirty=True; self.stash()
+        def success(result): self.recovery.get('chapters',{}).pop(str(n),None); self.state=result; self.refresh(); self.chapter_steps.setCurrentIndex(1); self.dirty=True; self.stash()
         self.submit(lambda s:s.generate_chapter(pid,version,n,extra,target),success)
 
     def finalize(self):

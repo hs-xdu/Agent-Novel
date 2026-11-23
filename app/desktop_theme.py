@@ -1,5 +1,10 @@
 STYLE = '''
 QMainWindow, QDialog { background: #f3f5f7; color: #243446; }
+QListWidget { background: white; border: 1px solid #d6dfe7; border-radius: 6px; outline: none; }
+QListWidget::item { padding: 10px 8px; border-radius: 4px; }
+QListWidget::item:selected { background: #e1f0ed; color: #164b43; }
+QTabBar::tab { padding: 8px 14px; background: #edf2f4; color: #526577; border: none; }
+QTabBar::tab:selected { background: white; color: #21665f; border-bottom: 2px solid #28776e; }
 QLabel { color: #33465a; background: transparent; }
 QLabel#brand { font-size: 23px; font-weight: 700; color: #163f45; }
 QLabel#pageTitle { font-size: 23px; font-weight: 600; color: #1c3045; }

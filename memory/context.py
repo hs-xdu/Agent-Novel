@@ -4,11 +4,32 @@ import re
 
 import tiktoken
 
-from models.domain import State, Settings
+from models.domain import State, Settings, Memory
+from memory.budget import request_cost, input_budget
 
 
 def encode(value) -> str:
     return json.dumps(value, ensure_ascii=False)
+
+
+def build_memory_context(state: State, number: int) -> str:
+    """正文、规则、指令及 schema 统一计入预算，不截断定稿正文。"""
+    chapter=state.chapters[number]
+    settings=Settings.model_validate_json(state.documents['settings'].approved)
+    data=dict(number=number,revision=chapter.revision,body=chapter.final,settings=settings.model_dump(),history=[])
+    people,clues={},{}
+    for n,record in sorted(state.memories.items()):
+        if n<number:
+            people.update({c.character_id:c.model_dump() for c in record.data.characters})
+            clues.update({c.clue_id:c.model_dump() for c in record.data.foreshadowing})
+    data.update(character_states=list(people.values()),foreshadowing=list(clues.values()))
+    if request_cost('memory',encode(data),Memory)>input_budget():
+        raise ValueError('本章正文与必要设定超出记忆提取预算，请提高 NOVEL_CONTEXT_TOKENS；正文已保存且不会截断')
+    for n,record in sorted(state.memories.items(),reverse=True):
+        if n>=number: continue
+        data['history'].append(dict(chapter=n,summary=record.data.summary))
+        if request_cost('memory',encode(data),Memory)>input_budget(): data['history'].pop(); break
+    return encode(data)
 
 
 def search(state: State, query: str, before: int | None = None) -> list[dict]:
