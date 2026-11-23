@@ -7,7 +7,7 @@ from uuid import uuid4
 
 from llm.client import Writer
 from memory.context import build_context, encode, search
-from models.domain import Chapter, Document, Memory, MemoryRecord, Project, Settings, State
+from models.domain import Chapter, Document, Memory, MemoryRecord, Project, Settings, State, OutlinePreferences
 from storage.repository import Repository, ConflictError
 
 log = logging.getLogger(__name__)
@@ -64,7 +64,7 @@ class NovelService:
             state.review_from = state.pending_from
         return self.repo.save(state, expected)
 
-    async def generate_document(self, pid, expected, key, idea=''):
+    async def generate_document(self, pid, expected, key, idea='', target_words=None, detail=None):
         self._key(key)
         async with self.operation(pid):
             state = self.repo.load(pid)
@@ -82,9 +82,21 @@ class NovelService:
                 parents.append(f'volume:{chapter.volume}')
             if any(not state.documents.get(k) or not state.documents[k].approved for k in parents):
                 raise ValueError('请先确认上级设定和大纲')
-            context = encode(dict(project=state.project.model_dump(), key=key, request=idea,
+            data = dict(project=state.project.model_dump(), key=key, request=idea,
                                   parents={k: state.documents[k].approved for k in parents},
-                                  existing=state.documents.get(key, Document()).approved))
+                                  existing=state.documents.get(key, Document()).approved)
+            if task != 'settings':
+                previous = state.outline_preferences.get(key, OutlinePreferences.for_kind(task))
+                preference = OutlinePreferences(target_words=target_words if target_words is not None else previous.target_words,
+                                                detail=detail if detail is not None else previous.detail)
+                data['outline_preferences'] = preference.model_dump()
+                data['scope_guidance'] = {
+                    'main':'仅写主题、故事主线、主角成长、关键转折和结局。不要逐章展开，也不要写正文或对话。具体事件安排留给分卷和章节大纲。',
+                    'volume':'只规划当前分卷的目标、主要事件、人物发展与阶段结局。不要写正文，细节留给章节大纲。',
+                    'outline':'只规划当前一章的目标、事件顺序、参与人物、冲突和结尾悬念，不扩写成正文。',
+                }[task]
+                state.outline_preferences[key] = preference
+            context = encode(data)
             result = (await self.writer.structured(task, context, Settings)).model_dump_json(indent=2) if task == 'settings' else await self.writer.text(task, context)
             state.documents.setdefault(key, Document()).draft = result
             return self.repo.save(state, expected)

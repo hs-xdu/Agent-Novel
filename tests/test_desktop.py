@@ -115,3 +115,25 @@ def test_failed_background_request_preserves_edit_and_reenables_window(window,qt
     assert window.body.toPlainText()=='不能丢失的草稿'
     assert window.tabs.widget(2).isEnabled()
     assert '不能丢失的草稿' in (window.repo.project_path(window.state.project.project_id)/'desktop-drafts.json').read_text(encoding='utf-8')
+
+
+def test_outline_options_are_per_document_and_restore(window,qtbot):
+    create(window)
+    window.kind.setCurrentIndex(window.kind.findData('main'))
+    assert window.outline_words.value()==1000
+    assert window.outline_detail.currentText()=='简明'
+    window.outline_words.setValue(700); window.outline_detail.setCurrentText('标准')
+    window.idea.setText('突出主角成长')
+    window.kind.setCurrentIndex(window.kind.findData('volume'))
+    assert window.outline_words.value()==800
+    window.outline_words.setValue(500); window.stash()
+    window.kind.setCurrentIndex(window.kind.findData('main'))
+    assert window.outline_words.value()==700 and window.idea.text()=='突出主角成长'
+    window.stash()
+    second=Window(window.repo,window.store); qtbot.addWidget(second)
+    second.kind.setCurrentIndex(second.kind.findData('main'))
+    assert second.outline_words.value()==700 and second.outline_detail.currentText()=='标准'
+    second.kind.setCurrentIndex(second.kind.findData('settings'))
+    assert second.outline_options.isHidden()
+    second.navigation.setCurrentRow(2)
+    assert second.tabs.currentIndex()==2 and second.page_title.text()=='章节创作'

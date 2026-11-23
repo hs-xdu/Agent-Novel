@@ -8,17 +8,19 @@ import sys
 from pathlib import Path
 
 from dotenv import load_dotenv
-from PySide6.QtCore import QThread, Signal, QTimer, QSaveFile, QIODevice
+from PySide6.QtCore import QThread, Signal, QTimer, QSaveFile, QIODevice, Qt
 from PySide6.QtGui import QFont, QFontDatabase
 from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QFormLayout, QLabel, QPushButton, QLineEdit, QPlainTextEdit, QSpinBox, QComboBox,
-    QTabWidget, QMessageBox, QFileDialog, QDialog, QDialogButtonBox)
+    QTabWidget, QMessageBox, QFileDialog, QDialog, QDialogButtonBox, QListWidget,
+    QFrame, QSplitter, QInputDialog, QGroupBox)
 
 from agent.service import NovelService
 from app.config import APP_NAME
 from app.model_settings import ModelSettings, SettingsStore
 from llm.client import OpenAIWriter, DemoWriter
-from models.domain import Project, Memory
+from models.domain import Project, Memory, OutlinePreferences
+from app.desktop_theme import STYLE
 from storage.repository import Repository
 
 
@@ -54,6 +56,8 @@ def button(text, callback, layout):
     widget = QPushButton(text)
     widget.clicked.connect(lambda: callback())
     layout.addWidget(widget)
+    if text.startswith('AI ') or text in ('确认生效','保存并应用','确认定稿并更新记忆'):
+        widget.setProperty('primary', True)
     return widget
 
 
@@ -135,23 +139,34 @@ class Window(QMainWindow):
             font = Path(os.environ.get('WINDIR', 'C:/Windows')) / 'Fonts' / 'msyh.ttc'
             if font.exists(): QFontDatabase.addApplicationFont(str(font))
         self.setFont(QFont('Microsoft YaHei', 10))
-        self.setStyleSheet('QPlainTextEdit,QLineEdit,QSpinBox,QComboBox {padding:5px;} QPushButton {padding:6px 12px;} QTabWidget::pane {border:1px solid #d4dce5;} QTabBar::tab {padding:10px 20px;}')
+        self.setStyleSheet(STYLE)
         self.repo, self.store = repo, store
         self.settings = store.load()
         self.state = None; self.job = None; self.loading = False
         self.doc_key = 'settings'; self.chapter_number = 1
         self.recovery = {}; self.dirty = False
-        self.setWindowTitle(APP_NAME); self.resize(1180, 860)
-        root = QWidget(); layout = QVBoxLayout(root); self.setCentralWidget(root)
+        self.setWindowTitle(APP_NAME); self.resize(1280, 900); self.setMinimumSize(1000, 720)
+        root = QWidget(); layout = QVBoxLayout(root); layout.setContentsMargins(20,18,20,12); layout.setSpacing(16); self.setCentralWidget(root)
         top = QHBoxLayout(); self.projects = QComboBox(); self.projects.setMinimumWidth(230)
-        top.addWidget(QLabel(APP_NAME)); top.addWidget(self.projects)
-        self.new_title = QLineEdit(); self.new_title.setPlaceholderText('新小说名称（必填）'); top.addWidget(self.new_title)
-        button('创建项目', self.create_project, top)
+        brand=QLabel('拾光'); brand.setObjectName('brand'); top.addWidget(brand)
+        tagline=QLabel('让故事慢慢成形'); tagline.setObjectName('muted'); top.addWidget(tagline); top.addStretch()
+        top.addWidget(QLabel('当前小说')); top.addWidget(self.projects)
+        self.new_title = QLineEdit(self); self.new_title.hide()
+        button('新建小说', self.ask_project, top)
         self.api_button = button('大模型 API 设置', self.api_settings, top)
         layout.addLayout(top)
-        self.summary = QLabel('请选择或创建小说项目'); layout.addWidget(self.summary)
-        self.tabs = QTabWidget(); layout.addWidget(self.tabs)
+        content=QHBoxLayout(); content.setSpacing(18); layout.addLayout(content,1)
+        self.navigation=QListWidget(); self.navigation.setObjectName('navigation'); self.navigation.setFixedWidth(150)
+        self.navigation.addItems(['项目管理','设定与大纲','章节创作','小说记忆']); content.addWidget(self.navigation)
+        area=QVBoxLayout(); area.setSpacing(8); content.addLayout(area,1)
+        self.page_title=QLabel('项目管理'); self.page_title.setObjectName('pageTitle'); area.addWidget(self.page_title)
+        self.summary = QLabel('请选择或创建小说项目'); self.summary.setObjectName('muted'); self.summary.setWordWrap(True); area.addWidget(self.summary)
+        self.tabs = QTabWidget(); self.tabs.tabBar().hide(); area.addWidget(self.tabs,1)
+        self.navigation.currentRowChanged.connect(self.tabs.setCurrentIndex)
+        self.tabs.currentChanged.connect(lambda index:(self.navigation.setCurrentRow(index),self.page_title.setText(self.tabs.tabText(index))))
+        self.navigation.setCurrentRow(0)
         self.project_form = QFormLayout(); self.project_fields = {}
+        self.project_form.setContentsMargins(24,24,24,24); self.project_form.setSpacing(18)
         project = QWidget(); project.setLayout(self.project_form); self.tabs.addTab(project, '项目管理')
         labels = {'title':'小说名称', 'genre':'题材', 'description':'创作想法 / 简介', 'target_readers':'目标读者', 'narrative_perspective':'叙事视角', 'writing_style':'语言风格', 'target_total_words':'目标总字数', 'target_chapter_words':'单章目标字数'}
         for key, label in labels.items():
@@ -159,31 +174,47 @@ class Window(QMainWindow):
             self.project_fields[key] = field; self.project_form.addRow(label, field)
         b = QPushButton('保存项目信息'); b.clicked.connect(self.save_project); self.project_form.addRow(b)
         b = QPushButton('导出正式章节 Markdown'); b.clicked.connect(self.export); self.project_form.addRow(b)
-        docs = QWidget(); dl = QVBoxLayout(docs); self.tabs.addTab(docs, '设定与大纲')
+        docs = QWidget(); outer = QHBoxLayout(docs); outer.setContentsMargins(16,16,16,16); self.tabs.addTab(docs, '设定与大纲')
+        doc_split=QSplitter(Qt.Orientation.Horizontal); outer.addWidget(doc_split)
+        config=QWidget(); config.setMinimumWidth(245); config.setMaximumWidth(320); dl=QVBoxLayout(config); dl.setContentsMargins(0,0,12,0); dl.setSpacing(12); doc_split.addWidget(config)
+        heading=QLabel('创作规划'); heading.setStyleSheet('font-size:16px;font-weight:600;'); dl.addWidget(heading)
         row = QHBoxLayout(); self.kind = QComboBox()
         for label, key in [('基础设定','settings'),('全书大纲','main'),('分卷大纲','volume'),('章节大纲','outline')]: self.kind.addItem(label,key)
-        self.doc_index = spin(); row.addWidget(self.kind); row.addWidget(QLabel('卷号 / 章节号')); row.addWidget(self.doc_index); dl.addLayout(row)
-        dl.addWidget(QLabel('生成仅保存候选。审阅后确认生效；基础设定为 JSON，请保留结构。'))
-        self.idea = QLineEdit(); self.idea.setPlaceholderText('本次生成要求'); dl.addWidget(self.idea)
-        self.document = QPlainTextEdit(); dl.addWidget(self.document)
-        row = QHBoxLayout(); dl.addLayout(row)
-        button('AI 生成 / 重新生成', self.generate_document, row)
-        button('保存候选', lambda: self.save_document(False), row)
-        button('确认生效', lambda: self.save_document(True), row)
+        dl.addWidget(QLabel('文档类型')); dl.addWidget(self.kind)
+        self.doc_index = spin(); self.index_label=QLabel('卷号 / 章节号'); dl.addWidget(self.index_label); dl.addWidget(self.doc_index)
+        self.outline_options=QWidget(); options=QFormLayout(self.outline_options); options.setContentsMargins(0,0,0,0); options.setSpacing(12)
+        self.outline_words=spin(1000,6000); self.outline_words.setMinimum(200); self.outline_words.setSingleStep(100); self.outline_words.setSuffix(' 字')
+        self.outline_detail=QComboBox(); self.outline_detail.addItems(['简明','标准','详细'])
+        options.addRow('目标字数',self.outline_words); options.addRow('详细程度',self.outline_detail); dl.addWidget(self.outline_options)
+        self.scope_hint=QLabel(); self.scope_hint.setWordWrap(True); self.scope_hint.setObjectName('muted'); dl.addWidget(self.scope_hint)
+        dl.addWidget(QLabel('补充要求（可选）'))
+        self.idea = QLineEdit(); self.idea.setPlaceholderText('例如：突出人物成长与核心转折'); dl.addWidget(self.idea)
+        row=QVBoxLayout(); dl.addLayout(row); button('AI 生成 / 重新生成', self.generate_document, row); dl.addStretch()
+        note=QLabel('生成结果先保存为候选。\n审阅满意后，再确认生效。'); note.setObjectName('muted'); note.setWordWrap(True); dl.addWidget(note)
+        editor_panel=QWidget(); editor_layout=QVBoxLayout(editor_panel); editor_layout.setContentsMargins(8,0,0,0); doc_split.addWidget(editor_panel); doc_split.setStretchFactor(1,1)
+        self.document_heading=QLabel('基础设定'); editor_layout.addWidget(self.document_heading)
+        self.document = QPlainTextEdit(); self.document.setPlaceholderText('在左侧填写要求并生成，或直接编辑内容。'); editor_layout.addWidget(self.document,1)
+        row = QHBoxLayout(); editor_layout.addLayout(row)
+        self.document_count=QLabel('0 字符'); self.document_count.setObjectName('muted'); row.addWidget(self.document_count); row.addStretch()
+        button('保存候选', lambda: self.save_document(False), row); button('确认生效', lambda: self.save_document(True), row)
         chapters = QWidget(); cl = QVBoxLayout(chapters); self.tabs.addTab(chapters, '章节创作')
+        cl.setContentsMargins(20,20,20,20); cl.setSpacing(12)
         row = QHBoxLayout(); self.number = spin(); self.volume = spin(); self.chapter_title = QLineEdit(); self.target = spin(2000,20000)
+        self.number.setMaximumWidth(90); self.volume.setMaximumWidth(90); self.target.setMaximumWidth(120)
+        self.chapter_title.setPlaceholderText('章节名称')
         for label, widget in [('章节',self.number),('名称',self.chapter_title),('分卷',self.volume),('目标字数',self.target)]: row.addWidget(QLabel(label)); row.addWidget(widget)
         button('加载章节', self.change_chapter, row); cl.addLayout(row)
-        self.outline = QPlainTextEdit(); self.outline.setReadOnly(True); self.outline.setMaximumHeight(110); cl.addWidget(self.outline)
+        outline_box=QGroupBox('查看本章正式大纲'); outline_box.setCheckable(True); outline_box.setChecked(False); box_layout=QVBoxLayout(outline_box)
+        self.outline = QPlainTextEdit(); self.outline.setReadOnly(True); self.outline.setMaximumHeight(110); box_layout.addWidget(self.outline); self.outline.hide(); outline_box.toggled.connect(self.outline.setVisible); cl.addWidget(outline_box)
         self.extra = QLineEdit(); self.extra.setPlaceholderText('额外创作要求'); cl.addWidget(self.extra)
-        self.body = QPlainTextEdit(); cl.addWidget(self.body)
+        self.body = QPlainTextEdit(); self.body.setPlaceholderText('在这里写下你的故事。AI 生成后，可以继续编辑或选中段落修改。'); cl.addWidget(self.body,1)
         row = QHBoxLayout(); cl.addLayout(row)
         button('保存草稿 / 章节信息', self.save_chapter, row)
         button('AI 创作 / 整章重写', self.generate_chapter, row)
         button('确认定稿并更新记忆', self.finalize, row)
         self.rewrite_instruction = QLineEdit(); self.rewrite_instruction.setPlaceholderText('选择正文段落后填写修改要求'); cl.addWidget(self.rewrite_instruction)
         row = QHBoxLayout(); cl.addLayout(row); button('修改选中段落', self.rewrite, row)
-        mem = QWidget(); ml = QVBoxLayout(mem); self.tabs.addTab(mem, '小说记忆')
+        mem = QWidget(); ml = QVBoxLayout(mem); ml.setContentsMargins(20,20,20,20); ml.setSpacing(12); self.tabs.addTab(mem, '小说记忆')
         self.memory_pick = QComboBox(); ml.addWidget(self.memory_pick)
         self.memory_text = QPlainTextEdit(); ml.addWidget(self.memory_text)
         row = QHBoxLayout(); ml.addLayout(row)
@@ -193,6 +224,8 @@ class Window(QMainWindow):
         self.history = QPlainTextEdit(); self.history.setReadOnly(True); ml.addWidget(self.history)
         self.timer = QTimer(self); self.timer.setSingleShot(True); self.timer.setInterval(1500); self.timer.timeout.connect(self.stash)
         self.document.textChanged.connect(self.edited); self.body.textChanged.connect(self.edited)
+        self.document.textChanged.connect(lambda:self.document_count.setText(f'{len("".join(self.document.toPlainText().split()))} 字符'))
+        self.outline_words.valueChanged.connect(self.edited); self.outline_detail.currentTextChanged.connect(self.edited)
         for field in list(self.project_fields.values()) + [self.chapter_title,self.volume,self.extra,self.idea]:
             (field.valueChanged if isinstance(field,QSpinBox) else field.textChanged).connect(self.edited)
         self.projects.currentIndexChanged.connect(self.select_project)
@@ -207,6 +240,7 @@ class Window(QMainWindow):
     def stash(self):
         if not self.state or self.loading or not self.dirty: return
         self.recovery.setdefault('documents',{})[self.doc_key] = self.document.toPlainText()
+        self.recovery.setdefault('outline_preferences',{})[self.doc_key] = dict(target_words=self.outline_words.value(),detail=self.outline_detail.currentText(),request=self.idea.text())
         self.recovery.setdefault('chapters',{})[str(self.chapter_number)] = dict(body=self.body.toPlainText(), title=self.chapter_title.text(), volume=self.volume.value(), extra=self.extra.text())
         self.recovery['project'] = self.project_values()
         directory = self.repo.project_path(self.state.project.project_id)
@@ -261,6 +295,11 @@ class Window(QMainWindow):
             self.new_title.clear(); self.refresh_projects(state.project.project_id)
         except Exception as exc: QMessageBox.warning(self,'无法创建项目',str(exc))
 
+    def ask_project(self):
+        if self.job: return
+        title,ok=QInputDialog.getText(self,'新建小说','为这个故事起一个名字：')
+        if ok: self.new_title.setText(title); self.create_project()
+
     def select_project(self):
         self.stash(); pid = self.projects.currentData()
         self.state = self.repo.load(pid) if pid else None; self.recovery = {}
@@ -283,7 +322,8 @@ class Window(QMainWindow):
         for number in sorted(self.state.memories): self.memory_pick.addItem(f'第{number}章 · 正式记忆',(number,False))
         for number in sorted(self.state.memory_candidates): self.memory_pick.addItem(f'第{number}章 · 待处理候选',(number,True))
         self.memory_pick.blockSignals(False); self.load_memory()
-        self.summary.setText(f'{self.state.project.title} · 已定稿 {sum(bool(c.final) for c in self.state.chapters.values())} 章 · 记忆：{self.state.memory_status}  {self.state.memory_error}')
+        memory_label={'synced':'已同步','pending':'待更新','updating':'更新中','failed':'需重试'}[self.state.memory_status]
+        self.summary.setText(f'{self.state.project.title}  ·  已定稿 {sum(bool(c.final) for c in self.state.chapters.values())} 章  ·  记忆{memory_label}  {self.state.memory_error}')
         self.loading = False
 
     def change_document(self):
@@ -295,6 +335,16 @@ class Window(QMainWindow):
         kind = self.kind.currentData(); self.doc_key = kind if kind in ('settings','main') else f'{kind}:{self.doc_index.value()}'
         doc = self.state.documents.get(self.doc_key)
         self.document.blockSignals(True); self.document.setPlainText(self.recovery.get('documents',{}).get(self.doc_key, (doc.draft or doc.approved) if doc else '')); self.document.blockSignals(False)
+        preference=self.state.outline_preferences.get(self.doc_key,OutlinePreferences.for_kind(kind)).model_dump()
+        preference.update(self.recovery.get('outline_preferences',{}).get(self.doc_key,{}))
+        for field in [self.outline_words,self.outline_detail,self.idea]: field.blockSignals(True)
+        self.outline_words.setValue(preference['target_words']); self.outline_detail.setCurrentText(preference['detail']); self.idea.setText(preference.get('request',''))
+        for field in [self.outline_words,self.outline_detail,self.idea]: field.blockSignals(False)
+        self.outline_options.setVisible(kind!='settings'); self.doc_index.setVisible(kind in ('volume','outline')); self.index_label.setVisible(kind in ('volume','outline'))
+        hints={'settings':'基础设定包含世界观、规则与人物，使用 JSON 编辑，请保留结构。', 'main':'只规划主线、人物成长与关键转折。具体情节留给分卷和章节。', 'volume':'规划本卷的目标、冲突与阶段结局。逐场细节留给章节。', 'outline':'明确本章事件、冲突与悬念，为正文创作提供依据。'}
+        self.scope_hint.setText(hints[kind]+'\n\n目标字数为生成参考，较短输出不能保证不会超时。' if kind!='settings' else hints[kind])
+        self.document_heading.setText(self.kind.currentText()+(' · 已有正式版本' if doc and doc.approved else ' · 候选待审阅'))
+        self.document_count.setText(f'{len("".join(self.document.toPlainText().split()))} 字符')
 
     def change_chapter(self): self.stash(); self.load_chapter()
 
@@ -322,8 +372,9 @@ class Window(QMainWindow):
     def generate_document(self):
         if not self.state: return
         pid, version, key, idea = self.state.project.project_id,self.state.version,self.doc_key,self.idea.text()
+        words,detail=self.outline_words.value(),self.outline_detail.currentText()
         def success(result): self.recovery.get('documents',{}).pop(key,None); self.state=result; self.refresh(); self.dirty=True; self.stash()
-        self.submit(lambda s:s.generate_document(pid,version,key,idea),success)
+        self.submit(lambda s:s.generate_document(pid,version,key,idea,words,detail),success)
 
     def save_chapter(self):
         if not self.state: return None

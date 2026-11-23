@@ -277,6 +277,32 @@ async def test_settings_and_relationship_validation(service):
         service.save_document(state.project.project_id, state.version, '../../bad', '内容')
 
 
+async def test_outline_length_scope_and_detail_reach_model_and_persist(service):
+    state=await prepare(service)
+    captured=[]
+    async def capture(task,context):
+        captured.append((task,json.loads(context)))
+        return '主线：寻找旧城真相。转折：发现来信的来源。结局：解开谜团。'
+    service.writer.text=capture
+    pid=state.project.project_id
+    state=await service.generate_document(pid,state.version,'main','突出成长',650,'标准')
+    task,data=captured[-1]
+    assert task=='main'
+    assert data['outline_preferences']=={'target_words':650,'detail':'标准'}
+    assert '不要逐章展开' in data['scope_guidance']
+    assert state.outline_preferences['main'].target_words==650
+    assert service.repo.load(pid).outline_preferences['main'].detail=='标准'
+    assert state.documents['main'].approved!=state.documents['main'].draft
+    state=await service.generate_document(pid,state.version,'main')
+    assert captured[-1][1]['outline_preferences']['target_words']==650
+    state=await service.generate_document(pid,state.version,'volume:1')
+    assert captured[-1][1]['outline_preferences']=={'target_words':800,'detail':'标准'}
+    with pytest.raises(ValidationError):
+        await service.generate_document(pid,state.version,'main',target_words=0)
+    with pytest.raises(ValidationError):
+        await service.generate_document(pid,state.version,'main',detail='任意值')
+
+
 async def test_openai_missing_config(monkeypatch):
     monkeypatch.delenv('OPENAI_API_KEY', raising=False)
     monkeypatch.delenv('OPENAI_MODEL', raising=False)

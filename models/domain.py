@@ -110,11 +110,22 @@ class MemoryRecord(Model):
     data: Memory
 
 
+class OutlinePreferences(Model):
+    target_words: int = Field(default=1000, ge=200, le=6000)
+    detail: Literal['简明', '标准', '详细'] = '简明'
+
+    @classmethod
+    def for_kind(cls, kind):
+        return cls(target_words={'main':1000,'volume':800,'outline':400}.get(kind,1000),
+                   detail={'main':'简明','volume':'标准','outline':'详细'}.get(kind,'简明'))
+
+
 class State(Model):
     schema_version: Literal[1] = 1
     version: str = ''
     project: Project
     documents: dict[str, Document] = Field(default_factory=dict)
+    outline_preferences: dict[str, OutlinePreferences] = Field(default_factory=dict)
     chapters: dict[int, Chapter] = Field(default_factory=dict)
     memories: dict[int, MemoryRecord] = Field(default_factory=dict)
     memory_candidates: dict[int, Memory] = Field(default_factory=dict)
