@@ -9,7 +9,7 @@
 ```powershell
 # 已安装 uv 时
 uv sync --locked
-Copy-Item .env.example .env
+uv run python -m app.init_env
 uv run python -m app.main
 ```
 
@@ -19,11 +19,21 @@ uv run python -m app.main
 py -3.12 -m venv .venv
 .\.venv\Scripts\python.exe -m pip install uv
 .\.venv\Scripts\uv.exe sync --locked --python .venv/Scripts/python.exe
-Copy-Item .env.example .env
+.\.venv\Scripts\python.exe -m app.init_env
 .\.venv\Scripts\uv.exe run python -m app.main
 ```
 
 打开 [本地工作台](http://127.0.0.1:18765)。应用只监听本机地址，同一数据目录只能启动一个实例。停止运行可在终端按 Ctrl+C。
+
+配置初始化命令同时适用于 CMD 和 PowerShell：仅在 `.env` 不存在或为零字节空文件时复制模板，已有非空配置会保留。在 CMD 中逐行执行以下命令即可初始化并打开配置：
+
+```bat
+cd /d E:\Agents\Agent_Novel
+.venv\Scripts\python.exe -m app.init_env
+notepad .env
+```
+
+`Copy-Item` 是 PowerShell 命令，CMD 不支持。如果模板复制失败，直接运行 `notepad .env` 可能打开或创建空文件。确认文件名为 `.env`，不要保存为 `.env.txt`。
 
 默认端口为 18765，避免与已有的 8080 预览服务混淆。若配置的端口被占用，启动会明确报错，请修改 `.env` 中的 NOVEL_PORT。可访问 [应用身份检查](http://127.0.0.1:18765/api/health)，确认返回的 app 是 `novel-agent`；如果页面出现 ROP 等其他项目，请核对地址和端口。
 
