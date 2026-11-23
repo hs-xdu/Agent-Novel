@@ -54,6 +54,23 @@ async def test_sdk_auth_error_not_retried():
         await writer.client.close()
 
 
+async def test_chat_protocol_text_and_json_validation():
+    requests=[]
+    payload=dict(summary='测试摘要',world_facts=[],characters=[],events=[],timeline=[],foreshadowing=[],conflicts=[])
+    def handler(request):
+        data=json.loads(request.content); requests.append(data)
+        text=json.dumps(payload) if data.get('response_format') else '正文'
+        return httpx.Response(200,json={'id':'chat_test','object':'chat.completion','created':1,'model':'test-model',
+            'choices':[{'index':0,'finish_reason':'stop','message':{'role':'assistant','content':text}}]})
+    writer=writer_for(handler); writer.api_mode='chat'
+    try:
+        assert await writer.text('chapter','{}')=='正文'
+        assert (await writer.structured('memory','{}',Memory)).summary=='测试摘要'
+        assert requests[1]['response_format']=={'type':'json_object'}
+        assert 'max_tokens' not in requests[1]
+    finally: await writer.client.close()
+
+
 async def test_sdk_retry_and_incomplete_response(monkeypatch):
     calls = []
     async def no_sleep(_):

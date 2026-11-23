@@ -3,10 +3,26 @@ name = "novel-agent"
 version = "0.1.0"
 description = "本地人机协作网文写作工作台"
 requires-python = ">=3.12"
-dependencies = ["nicegui>=3,<4", "pydantic>=2,<3", "openai>=2,<3", "filelock>=3,<4", "python-dotenv>=1,<2", "tiktoken>=0.9,<1"]
+dependencies = [
+    "nicegui>=3,<4",
+    "pydantic>=2,<3",
+    "openai>=2,<3",
+    "filelock>=3,<4",
+    "python-dotenv>=1,<2",
+    "tiktoken>=0.9,<1",
+    "pyside6>=6.8,<7",
+    "keyring>=25,<26",
+]
 
 [dependency-groups]
-dev = ["pytest>=8,<10", "pytest-asyncio>=1,<2", "httpx>=0.28,<1", "playwright>=1.50,<2"]
+dev = [
+    "pytest>=8,<10",
+    "pytest-asyncio>=1,<2",
+    "httpx>=0.28,<1",
+    "playwright>=1.50,<2",
+    "pytest-qt>=4,<5",
+    "pyinstaller>=6,<7",
+]
 
 [tool.pytest.ini_options]
 pythonpath = ["."]

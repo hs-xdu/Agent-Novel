@@ -7,3 +7,10 @@ projects/
 logs/
 .coverage
 htmlcov/
+.desktop/
+build/
+dist/
+*.spec
+!Shiguang.spec
+release/
+release-fixed/

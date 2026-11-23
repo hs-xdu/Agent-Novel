@@ -26,17 +26,20 @@ class Writer(Protocol):
 
 
 class OpenAIWriter:
-    def __init__(self):
-        self.key = os.getenv('OPENAI_API_KEY', '')
-        self.model = os.getenv('OPENAI_MODEL', '')
+    def __init__(self, settings=None):
+        self.key = settings.key.get_secret_value() if settings else os.getenv('OPENAI_API_KEY', '')
+        self.model = settings.model if settings else os.getenv('OPENAI_MODEL', '')
+        self.base_url = settings.base_url if settings else os.getenv('OPENAI_BASE_URL') or None
+        self.timeout = settings.timeout if settings else float(os.getenv('NOVEL_TIMEOUT', '120'))
+        self.api_mode = settings.api_mode if settings else 'responses'
         self.client = None
 
     def _client(self):
         if not self.key or not self.model:
-            raise ModelError('请在 .env 中配置 OPENAI_API_KEY 和 OPENAI_MODEL，或用 NOVEL_MODE=demo 演示')
+            raise ModelError('请在“大模型 API 设置”中配置密钥和模型；网页版也可在 .env 中配置，或选择 demo 演示')
         if self.client is None:
-            self.client = AsyncOpenAI(api_key=self.key, base_url=os.getenv('OPENAI_BASE_URL') or None,
-                                      timeout=float(os.getenv('NOVEL_TIMEOUT', '120')), max_retries=0)
+            self.client = AsyncOpenAI(api_key=self.key, base_url=self.base_url,
+                                      timeout=self.timeout, max_retries=0)
         return self.client
 
     async def _request(self, task, context, schema=None):
@@ -49,6 +52,22 @@ class OpenAIWriter:
         for attempt in range(3):
             started = time.monotonic()
             try:
+                if self.api_mode == 'chat':
+                    instruction = SYSTEM + '\n' + TASKS[task]
+                    if schema:
+                        instruction += '\n只输出 JSON，必须符合此 schema：' + json.dumps(schema.model_json_schema(), ensure_ascii=False)
+                    arguments = dict(model=self.model, messages=[{'role': 'system', 'content': instruction}, {'role': 'user', 'content': context}])
+                    if schema:
+                        arguments['response_format'] = {'type': 'json_object'}
+                    else:
+                        arguments['max_tokens'] = output_limit
+                    result = await client.chat.completions.create(**arguments)
+                    if not result.choices or result.choices[0].finish_reason != 'stop':
+                        raise ModelError('模型输出未完成，请调整输出预算或选择支持的模型')
+                    value = result.choices[0].message.content
+                    if not value:
+                        raise ModelError('模型未返回有效内容')
+                    return schema.model_validate_json(value) if schema else value
                 kwargs = dict(model=self.model, instructions=SYSTEM + '\n' + TASKS[task], input=context,
                               max_output_tokens=output_limit, store=False)
                 if schema:

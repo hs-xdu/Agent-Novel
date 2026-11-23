@@ -1,6 +1,43 @@
 # 拾光 小说写作助手
 
-基于 Python、NiceGUI、Pydantic 和本地 Markdown/JSON 快照的小说写作工作台。支持多项目、设定与三级大纲、章节草稿与定稿、选中段落改写、长期记忆和 Markdown 导出。
+基于 Python、PySide6、Pydantic 和本地 Markdown/JSON 快照的小说写作工作台。支持多项目、设定与三级大纲、章节草稿与定稿、选中段落改写、长期记忆和 Markdown 导出，保留 NiceGUI 网页兼容入口。
+
+## 桌面版（当前推荐入口）
+
+主界面已迁移为 **PySide6 原生桌面窗口**，不需要浏览器、18765 端口或本地 HTTP 服务。现有 projects/ 小说数据继续使用，生成、定稿和记忆规则保持一致。NiceGUI 网页入口保留用于兼容及回归测试。
+
+在本项目目录双击 **启动拾光.cmd**，即可打开桌面版。也可以执行：
+
+```bat
+cd /d E:\Agents\Agent_Novel
+.venv\Scripts\python.exe -m app.desktop
+```
+
+初次安装依赖请使用 `uv sync --locked`。桌面版与旧网页版不能同时写入同一数据目录；如果提示占用，先关闭旧实例。
+
+点击窗口右上角 **大模型 API 设置**，可以直接修改运行模式、接口协议、API 基础地址、模型名称、密钥和超时：
+
+- 现有 `.env` 会在首次使用时读取。保存后以桌面设置为准，无需重启或修改 `.env`。
+- Responses 模式需要支持 Responses API 和结构化输出；Chat 模式需要支持 OpenAI 兼容 Chat Completions 和 JSON Object，程序会额外进行 Pydantic 校验。厂商与地域不同，密钥和地址不能混用。
+- “OpenAI 地址”和“千问北京地址”按钮只填写地址，不改动密钥和模型。千问原有 Responses 配置可继续使用。
+- “测试连接”会用当前填写值测试文本及结构化输出，可能产生少量 API 费用；测试不会自动保存。“保存并应用”后下一次任务立即使用新设置。
+- API 密钥以密码形式显示，保存至 Windows 系统凭据库；`.desktop/model.json` 只存非密钥配置。凭据库不可用时会提示失败，不回退到明文保存。原 `.env` 仍保留，请自行妥善管理。
+
+四个工作区分别为项目管理、设定与大纲、章节创作和小说记忆。操作顺序与下文相同。AI 任务在后台线程运行，任务进行中允许切换标签查看，但暂时禁用编辑，防止过期结果覆盖内容；任务结束后恢复。关闭窗口时如有任务，会提示等待完成，不会直接强制终止写入。
+
+设定和章节的未提交编辑会在约 1.5 秒后、切换项目/文档/章节及关闭窗口时写入 `projects/<id>/desktop-drafts.json`，重新打开项目自动恢复。这是编辑缓存，不会确认设定、定稿正文或更新记忆。正式数据仍需点击相应保存/确认按钮；生成失败后可以修正配置并重试。
+
+启动异常和任务错误类型保存在 `logs/desktop.log`，不记录密钥或小说内容。桌面窗口不依赖本聊天执行会话中的 Web 预览。
+
+Windows 分发包构建命令：
+
+```powershell
+uv run pyinstaller --noconfirm --distpath release Shiguang.spec
+```
+
+将生成的整个 `release/Shiguang/` 文件夹放到可写目录，双击 `Shiguang.exe` 使用。需要携带现有小说时，在关闭旧程序后复制 projects/ 到该目录。不要只复制 exe，也不要打包 `.env` 或密钥。首次启动仍需在软件内配置模型。原始小说目录和构建包数据目录相互独立，不会自动迁移。打包配置会排除 Conda 的同名 ICU DLL，使用 Windows 系统 ICU，避免 Qt 启动时符号不匹配。
+
+桌面自动化测试：`uv run pytest tests/test_desktop.py -q`。无显示环境可设置 `QT_QPA_PLATFORM=offscreen`。
 
 ## 启动
 
