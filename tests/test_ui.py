@@ -38,7 +38,7 @@ def browser_app(tmp_path_factory):
                 pytest.fail('UI server did not start')
             identity = httpx.get(url + '/api/health', timeout=5).json()
             assert identity['app'] == 'novel-agent'
-            assert identity['name'] == '墨舟 · 小说写作工作台'
+            assert identity['name'] == '拾光 · 小说写作助手'
             with sync_playwright() as playwright:
                 edge = Path('C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe')
                 options = {'executable_path': str(edge)} if edge.exists() else {}
@@ -84,6 +84,18 @@ def approve(page):
 def test_browser_full_creation_edit_finalize_and_memory(browser_app):
     page, url, directory, errors = browser_app
     page.goto(url)
+    expect(page).to_have_title('拾光 · 小说写作助手')
+    expect(page.get_by_text('拾光 · 小说写作助手', exact=True)).to_be_visible()
+    # 空标题及纯空格在表单中提示，不调用存储，不暴露底层 Pydantic 错误。
+    page.get_by_role('button', name='创建项目', exact=True).click()
+    expect(page.get_by_text('请先填写新小说名称，再创建项目', exact=True)).to_be_visible()
+    expect(page.get_by_text('请先填写小说名称', exact=True)).to_be_visible()
+    assert not list((directory / 'projects').glob('*/CURRENT'))
+    page.get_by_label('新小说名称', exact=True).fill('   ')
+    page.get_by_role('button', name='创建项目', exact=True).click()
+    expect(page.get_by_text('请先填写小说名称', exact=True)).to_be_visible()
+    assert 'validation error for Project' not in page.locator('body').inner_text()
+    assert not list((directory / 'projects').glob('*/CURRENT'))
     page.get_by_label('新小说名称', exact=True).fill('浏览器验收小说')
     page.get_by_role('button', name='创建项目', exact=True).click()
     expect(page.get_by_role('tab', name='项目管理')).to_be_visible()

@@ -9,7 +9,7 @@ from agent.service import NovelService
 from llm.client import create_writer
 from models.domain import Project
 from storage.repository import Repository
-from app.config import APP_ID, ensure_available, preview_port
+from app.config import APP_ID, APP_NAME, ensure_available, preview_port
 
 LABELS = {'genre': '题材', 'description': '创作想法 / 简介', 'target_readers': '目标读者',
           'narrative_perspective': '叙事视角', 'writing_style': '语言风格',
@@ -19,13 +19,13 @@ LABELS = {'genre': '题材', 'description': '创作想法 / 简介', 'target_rea
 def build_app(service: NovelService):
     @app.get('/api/health')
     def health():
-        return {'app': APP_ID, 'name': '墨舟 · 小说写作工作台', 'version': '0.1.0'}
+        return {'app': APP_ID, 'name': APP_NAME, 'version': '0.1.0'}
 
     @ui.page('/')
     def index():
         session = {'pid': None, 'number': 1, 'volume': 1, 'tab': '项目管理', 'kind': 'settings', 'doc_index': 1}
         with ui.header().classes('items-center justify-between bg-slate-900'):
-            ui.label('墨舟 · 小说写作工作台').classes('text-xl font-bold')
+            ui.label(APP_NAME).classes('text-xl font-bold')
             ui.label('离线演示 · 内容为固定示例' if os.getenv('NOVEL_MODE') == 'demo' else '本地项目 · AI 辅助创作').classes('text-sm')
         ui.add_css('body {background:#f5f6f8} .q-textarea textarea {line-height:1.8} .q-tab {font-size:15px}')
 
@@ -68,8 +68,15 @@ def build_app(service: NovelService):
             with ui.row().classes('w-full items-end'):
                 ui.select({p.project_id: p.title for p in projects}, value=session['pid'],
                           label='当前小说项目', on_change=select_project).classes('w-80').props('outlined')
-                title = ui.input('新小说名称').classes('w-64')
+                title = ui.input('新小说名称', placeholder='必填，例如：旧城来信', validation={
+                    '请先填写小说名称': lambda value: bool((value or '').strip()),
+                    '小说名称不能超过 200 字': lambda value: len((value or '').strip()) <= 200,
+                }).classes('w-64').props('maxlength=200')
                 async def create():
+                    if not title.validate():
+                        ui.notify('请先填写新小说名称，再创建项目', type='warning')
+                        title.run_method('focus')
+                        return
                     def action():
                         project = Project(title=title.value.strip())
                         service.repo.create(project)
@@ -278,7 +285,7 @@ def main():
     repository.acquire_instance()
     app.on_shutdown(repository.close)
     build_app(NovelService(repository, create_writer()))
-    ui.run(host='127.0.0.1', port=port, title='墨舟 · 小说写作工作台', reload=False, show=False)
+    ui.run(host='127.0.0.1', port=port, title=APP_NAME, reload=False, show=False)
 
 
 if __name__ == '__main__':

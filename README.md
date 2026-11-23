@@ -1,4 +1,4 @@
-# 墨舟 小说写作 Agent
+# 拾光 小说写作助手
 
 基于 Python、NiceGUI、Pydantic 和本地 Markdown/JSON 快照的小说写作工作台。支持多项目、设定与三级大纲、章节草稿与定稿、选中段落改写、长期记忆和 Markdown 导出。
 

@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 from typing import Literal
 from uuid import uuid4
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator, field_validator
 
 
 def now() -> str:
@@ -25,6 +25,11 @@ class Project(Model):
     target_chapter_words: int = Field(default=2000, ge=1, le=20000)
     created_at: str = Field(default_factory=now)
     updated_at: str = Field(default_factory=now)
+
+    @field_validator('title', mode='before')
+    @classmethod
+    def trim_title(cls, value):
+        return value.strip() if isinstance(value, str) else value
 
 
 class Character(Model):

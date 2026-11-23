@@ -159,6 +159,9 @@ def test_project_isolation_validation_and_stale_version(service):
         service.update_project(a.project.project_id, a.version, {'title': '旧状态'})
     with pytest.raises(ValidationError):
         Project(title='', target_chapter_words=0)
+    with pytest.raises(ValidationError):
+        Project(title='   ')
+    assert Project(title='  拾光小说  ').title == '拾光小说'
     with pytest.raises(ValueError):
         service.repo.load('../escape')
 

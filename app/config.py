@@ -2,6 +2,7 @@ import os
 import socket
 
 APP_ID = 'novel-agent'
+APP_NAME = '拾光 · 小说写作助手'
 DEFAULT_PORT = 18765
 
 
