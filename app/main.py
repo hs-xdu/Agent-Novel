@@ -9,6 +9,7 @@ from agent.service import NovelService
 from llm.client import create_writer
 from models.domain import Project
 from storage.repository import Repository
+from app.config import APP_ID, ensure_available, preview_port
 
 LABELS = {'genre': '题材', 'description': '创作想法 / 简介', 'target_readers': '目标读者',
           'narrative_perspective': '叙事视角', 'writing_style': '语言风格',
@@ -16,6 +17,10 @@ LABELS = {'genre': '题材', 'description': '创作想法 / 简介', 'target_rea
 
 
 def build_app(service: NovelService):
+    @app.get('/api/health')
+    def health():
+        return {'app': APP_ID, 'name': '墨舟 · 小说写作工作台', 'version': '0.1.0'}
+
     @ui.page('/')
     def index():
         session = {'pid': None, 'number': 1, 'volume': 1, 'tab': '项目管理', 'kind': 'settings', 'doc_index': 1}
@@ -264,6 +269,8 @@ def build_app(service: NovelService):
 
 def main():
     load_dotenv()
+    port = preview_port()
+    ensure_available(port)
     logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(name)s %(message)s')
     # SDK 的 HTTP 请求日志可能包含地址；应用不记录密钥、正文和提示词。
     logging.getLogger('httpx').setLevel(logging.WARNING)
@@ -271,7 +278,7 @@ def main():
     repository.acquire_instance()
     app.on_shutdown(repository.close)
     build_app(NovelService(repository, create_writer()))
-    ui.run(host='127.0.0.1', port=int(os.getenv('NOVEL_PORT', '8080')), title='墨舟 · 小说写作工作台', reload=False, show=False)
+    ui.run(host='127.0.0.1', port=port, title='墨舟 · 小说写作工作台', reload=False, show=False)
 
 
 if __name__ == '__main__':

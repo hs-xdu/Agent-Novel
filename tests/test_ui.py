@@ -36,6 +36,9 @@ def browser_app(tmp_path_factory):
                 time.sleep(.2)
             else:
                 pytest.fail('UI server did not start')
+            identity = httpx.get(url + '/api/health', timeout=5).json()
+            assert identity['app'] == 'novel-agent'
+            assert identity['name'] == '墨舟 · 小说写作工作台'
             with sync_playwright() as playwright:
                 edge = Path('C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe')
                 options = {'executable_path': str(edge)} if edge.exists() else {}

@@ -23,7 +23,9 @@ Copy-Item .env.example .env
 .\.venv\Scripts\uv.exe run python -m app.main
 ```
 
-打开 [本地工作台](http://127.0.0.1:8080)。应用只监听本机地址，同一数据目录只能启动一个实例。停止运行可在终端按 Ctrl+C。
+打开 [本地工作台](http://127.0.0.1:18765)。应用只监听本机地址，同一数据目录只能启动一个实例。停止运行可在终端按 Ctrl+C。
+
+默认端口为 18765，避免与已有的 8080 预览服务混淆。若配置的端口被占用，启动会明确报错，请修改 `.env` 中的 NOVEL_PORT。可访问 [应用身份检查](http://127.0.0.1:18765/api/health)，确认返回的 app 是 `novel-agent`；如果页面出现 ROP 等其他项目，请核对地址和端口。
 
 也可用 `python -m pip install -r requirements.txt` 安装运行依赖；测试依赖由 uv 的开发依赖组管理。
 
@@ -47,7 +49,7 @@ OPENAI_BASE_URL=https://api.openai.com/v1
 | 配置 | 默认值 | 用途 |
 |---|---|---|
 | NOVEL_DATA_DIR | projects | 小说数据目录 |
-| NOVEL_PORT | 8080 | 本机服务端口 |
+| NOVEL_PORT | 18765 | 本机服务端口 |
 | NOVEL_TIMEOUT | 120 | 单次模型请求超时秒数 |
 | NOVEL_CONTEXT_TOKENS | 24000 | 总上下文预算，需适配所选模型 |
 | NOVEL_OUTPUT_TOKENS | 6000 | 输出预留与请求输出上限 |
