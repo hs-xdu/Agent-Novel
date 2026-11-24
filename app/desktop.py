@@ -326,9 +326,17 @@ class Window(QMainWindow):
     def show_issue(self,issue,memory=False):
         dialog=QDialog(self);dialog.setWindowTitle(issue.title);dialog.resize(630,330)
         layout=QVBoxLayout(dialog)
-        for text in [issue.title,('已定稿正文已保存，无需重新定稿。' if memory else '已保存的内容保留，本次失败不会覆盖正式版本。'),issue.explanation,'下一步：'+issue.next_step]:
-            label=QLabel(text);label.setWordWrap(True);layout.addWidget(label)
+        paragraphs=[issue.title,('已定稿正文已保存，无需重新定稿。' if memory else '已保存的内容保留，本次失败不会覆盖正式版本。'),issue.explanation,'下一步：'+issue.next_step]
+        for text in paragraphs:
+            label=QLabel(text);label.setWordWrap(True)
+            label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse|Qt.TextInteractionFlag.TextSelectableByKeyboard)
+            label.setFocusPolicy(Qt.FocusPolicy.StrongFocus);layout.addWidget(label)
         details=QPlainTextEdit(issue.details);details.setReadOnly(True);details.setVisible(False);layout.addWidget(details)
+        copy_row=QHBoxLayout();layout.addLayout(copy_row)
+        copied=QLabel();copied.setObjectName('muted')
+        def copy_all():
+            QApplication.clipboard().setText('\n\n'.join(paragraphs+[issue.details]));copied.setText('已复制，可直接粘贴反馈')
+        button('复制全部说明',copy_all,copy_row);copy_row.addWidget(copied);copy_row.addStretch()
         row=QHBoxLayout();layout.addLayout(row)
         button('查看详情',lambda:details.setVisible(not details.isVisible()),row)
         if memory:

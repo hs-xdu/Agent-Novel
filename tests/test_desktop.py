@@ -195,3 +195,21 @@ def test_failed_memory_result_is_not_reported_as_success(window,qtbot,monkeypatc
     window.state=window.repo.save(state,state.version);window.refresh()
     assert window.generate_body_button.isEnabled()
     assert window.chapter_retry.isHidden()
+
+
+def test_failure_dialog_text_is_selectable_and_all_details_copy(window,qtbot,monkeypatch):
+    from PySide6.QtWidgets import QApplication,QDialog,QPushButton,QLabel
+    from PySide6.QtCore import Qt
+    from app.guidance import explain_error
+    issue=explain_error('等待模型超时',{'code':'timeout','reference':'copy-reference','details':'本次耗时：120秒'},True)
+    def inspect_dialog(dialog):
+        labels=[label for label in dialog.findChildren(QLabel) if label.text() in (issue.title,issue.explanation,'下一步：'+issue.next_step)]
+        assert len(labels)==3
+        assert all(label.textInteractionFlags()&Qt.TextInteractionFlag.TextSelectableByMouse for label in labels)
+        copy=next(button for button in dialog.findChildren(QPushButton) if button.text()=='复制全部说明')
+        copy.click()
+        text=QApplication.clipboard().text()
+        assert issue.explanation in text and issue.next_step in text and 'copy-reference' in text and '正文已保存' in text
+        dialog.accept();return 0
+    monkeypatch.setattr(QDialog,'exec',inspect_dialog)
+    window.show_issue(issue,memory=True)
