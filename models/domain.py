@@ -78,6 +78,7 @@ class Chapter(Model):
     draft: str = ''
     final: str = ''
     revision: int = 0
+    draft_incomplete: bool = False
     status: Literal['draft', 'final'] = 'draft'
 
 
@@ -130,6 +131,13 @@ class ChapterPlan(Model):
     chapters: list[PlannedChapter] = Field(min_length=1, max_length=30)
 
 
+class IncompleteDraft(Model):
+    candidate_id: str = Field(default_factory=lambda: uuid4().hex)
+    text: str
+    diagnostic: dict[str,str]
+    created_at: str = Field(default_factory=now)
+
+
 class State(Model):
     schema_version: Literal[1] = 1
     version: str = ''
@@ -139,6 +147,7 @@ class State(Model):
     chapter_goals: dict[int, str] = Field(default_factory=dict)
     outline_preferences: dict[str, OutlinePreferences] = Field(default_factory=dict)
     chapters: dict[int, Chapter] = Field(default_factory=dict)
+    incomplete_chapters: dict[int,list[IncompleteDraft]] = Field(default_factory=dict)
     memories: dict[int, MemoryRecord] = Field(default_factory=dict)
     memory_candidates: dict[int, Memory] = Field(default_factory=dict)
     memory_status: Literal['synced', 'pending', 'updating', 'failed'] = 'synced'

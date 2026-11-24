@@ -106,6 +106,8 @@ class Repository:
             write(f'drafts/chapter_{number:03d}.md', chapter.draft)
             if chapter.final:
                 write(f'chapters/chapter_{number:03d}.md', chapter.final)
+        for number,items in state.incomplete_chapters.items():
+            for item in items:write(f'incomplete/chapter_{number:03d}/{item.candidate_id}.md',item.text)
         write('outline/chapters.json', {str(n): c.model_dump(exclude={'draft', 'final'}) for n, c in state.chapters.items()})
         write('memory/records.json', {str(n): m.model_dump() for n, m in state.memories.items()})
         write('memory/story_summary.md', '\n\n'.join(f'第{n}章：{m.data.summary}' for n, m in sorted(state.memories.items())))

@@ -9,6 +9,8 @@ from llm.client import Writer
 from memory.context import build_context, build_memory_context, encode, search
 from models.domain import Chapter, Document, Memory, MemoryRecord, Project, Settings, State, OutlinePreferences, ChapterPlan
 from storage.repository import Repository, ConflictError
+from llm.errors import IncompleteGeneration
+from models.domain import IncompleteDraft
 
 log = logging.getLogger(__name__)
 
@@ -150,6 +152,7 @@ class NovelService:
     def save_chapter(self, pid, expected, number, title, volume, body):
         state = self._editable(pid, expected)
         chapter = state.chapters.setdefault(number, Chapter(number=number))
+        if chapter.draft!=body:chapter.draft_incomplete=False
         chapter.title, chapter.volume, chapter.draft = title, volume, body
         Chapter.model_validate(chapter.model_dump())
         return self.repo.save(state, expected)
@@ -164,9 +167,24 @@ class NovelService:
             if any(n not in state.chapters or not state.chapters[n].final for n in range(1, number)):
                 raise ValueError('请先按顺序定稿前面的章节')
             context = build_context(state, number, extra, target)
-            result = await self.writer.text('chapter', context)
+            try:
+                result = await self.writer.text('chapter', context)
+            except IncompleteGeneration as exc:
+                if exc.partial_text.strip():
+                    state.incomplete_chapters.setdefault(number,[]).append(IncompleteDraft(text=exc.partial_text,diagnostic=exc.diagnostic()))
+                    self.repo.save(state,expected)
+                raise
             state.chapters[number].draft = result
+            state.chapters[number].draft_incomplete=False
             return self.repo.save(state, expected)
+
+    def adopt_incomplete(self,pid,expected,number,candidate_id):
+        state=self._editable(pid,expected)
+        item=next((c for c in state.incomplete_chapters.get(number,[]) if c.candidate_id==candidate_id),None)
+        if not item:raise ValueError('未找到未完成候选，请重新加载')
+        state.chapters[number].draft=item.text
+        state.chapters[number].draft_incomplete=True
+        return self.repo.save(state,expected)
 
     async def rewrite(self, pid, expected, number, body, start, end, instruction):
         async with self.operation(pid):
@@ -192,6 +210,7 @@ class NovelService:
             if state.version != expected:
                 raise ConflictError('项目已更新，请重新加载')
             chapter = state.chapters[number]
+            if chapter.draft_incomplete:raise ValueError('此草稿来自未完成候选，请先补全并编辑正文，再确认定稿。')
             if not chapter.draft.strip():
                 raise ValueError('请先保存非空章节草稿')
             build_context(state, number)

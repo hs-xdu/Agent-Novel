@@ -2,6 +2,7 @@ import json
 import os
 from pathlib import Path
 from urllib.parse import urlsplit
+from typing import Literal
 
 import keyring
 from dotenv import dotenv_values
@@ -15,6 +16,7 @@ class ModelSettings(BaseModel):
     model: str = ''
     key: SecretStr = SecretStr('')
     timeout: int = Field(default=120, ge=5, le=600)
+    chapter_reasoning: Literal['auto','none','low','medium','high','xhigh'] = 'low'
 
     @field_validator('base_url')
     @classmethod

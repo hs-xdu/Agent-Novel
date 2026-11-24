@@ -85,18 +85,21 @@ class ApiDialog(QDialog):
         self.base = QLineEdit(); self.model = QLineEdit(); self.key = QLineEdit()
         self.key.setEchoMode(QLineEdit.EchoMode.Password)
         self.timeout = spin(120, 600); self.timeout.setMinimum(5)
+        self.reasoning=QComboBox()
+        for label,value in [('低（正文推荐）','low'),('关闭','none'),('中','medium'),('高','high'),('最高','xhigh'),('服务商默认（兼容）','auto')]:self.reasoning.addItem(label,value)
         settings = owner.settings
         self.mode.setCurrentText(settings.mode); self.protocol.setCurrentText(settings.api_mode)
         self.base.setText(settings.base_url); self.model.setText(settings.model)
         self.key.setText(settings.key.get_secret_value()); self.timeout.setValue(settings.timeout)
+        self.reasoning.setCurrentIndex(self.reasoning.findData(settings.chapter_reasoning))
         presets = QHBoxLayout()
         button('OpenAI 地址', lambda: self.base.setText('https://api.openai.com/v1'), presets)
         button('千问北京地址', lambda: self.base.setText('https://dashscope.aliyuncs.com/compatible-mode/v1'), presets)
         layout.addLayout(presets)
-        for name, field in [('运行模式（demo 为固定示例）', self.mode), ('接口协议', self.protocol), ('API 基础地址', self.base), ('模型名称', self.model), ('API 密钥', self.key), ('超时秒数', self.timeout)]:
+        for name, field in [('运行模式（demo 为固定示例）', self.mode), ('接口协议', self.protocol), ('API 基础地址', self.base), ('模型名称', self.model), ('API 密钥', self.key), ('超时秒数', self.timeout),('正文思考强度',self.reasoning)]:
             form.addRow(name, field)
         layout.addLayout(form)
-        hint = QLabel('Responses 需要支持结构化输出；Chat 需要支持 JSON Object。\n地址与密钥须属于同一平台及地域。保存后立即用于下一次任务。\n密钥保存到系统凭据库，不写入项目、普通配置或 Git。')
+        hint = QLabel('思考强度仅用于正文生成与段落改写。不同模型支持的档位不同，\n若接口拒绝该参数，请选择“服务商默认”。设定、大纲与记忆保持服务商默认。\n保存后下一次任务立即生效；密钥保存在系统凭据库。')
         hint.setWordWrap(True); layout.addWidget(hint)
         self.result = QLabel('测试会发送两次短请求，可能产生少量 API 费用。'); layout.addWidget(self.result)
         self.controls = QWidget(); row = QHBoxLayout(self.controls)
@@ -105,7 +108,7 @@ class ApiDialog(QDialog):
 
     def value(self):
         return ModelSettings(mode=self.mode.currentText(), api_mode=self.protocol.currentText(), base_url=self.base.text(),
-                             model=self.model.text().strip(), key=self.key.text().strip(), timeout=self.timeout.value())
+                             model=self.model.text().strip(), key=self.key.text().strip(), timeout=self.timeout.value(),chapter_reasoning=self.reasoning.currentData())
 
     def save(self):
         try:
@@ -244,6 +247,16 @@ class Window(QMainWindow):
         button('确认定稿并更新记忆', self.finalize, row)
         self.rewrite_instruction = QLineEdit(); self.rewrite_instruction.setPlaceholderText('选择正文段落后填写修改要求'); cl.addWidget(self.rewrite_instruction)
         row = QHBoxLayout(); cl.addLayout(row); button('修改选中段落', self.rewrite, row)
+        self.partial_box=QGroupBox('未完成候选（点击展开，不会自动覆盖草稿或进入记忆）')
+        self.partial_box.setCheckable(True);self.partial_box.setChecked(False)
+        partial_outer=QVBoxLayout(self.partial_box);self.partial_content=QWidget();partial_layout=QVBoxLayout(self.partial_content)
+        partial_layout.setContentsMargins(0,0,0,0);partial_outer.addWidget(self.partial_content)
+        self.partial_content.hide();self.partial_box.toggled.connect(self.partial_content.setVisible)
+        self.partial_pick=QComboBox();partial_layout.addWidget(self.partial_pick)
+        self.partial_text=QPlainTextEdit();self.partial_text.setReadOnly(True);self.partial_text.setMaximumHeight(160);partial_layout.addWidget(self.partial_text)
+        self.partial_hint=QPlainTextEdit();self.partial_hint.setReadOnly(True);self.partial_hint.setMaximumHeight(100);partial_layout.addWidget(self.partial_hint)
+        button('采用为待补全草稿',self.adopt_partial,partial_layout);cl.addWidget(self.partial_box)
+        self.partial_pick.currentIndexChanged.connect(self.load_partial)
         mem = QWidget(); ml = QVBoxLayout(mem); ml.setContentsMargins(20,20,20,20); ml.setSpacing(12); self.tabs.addTab(mem, '小说记忆')
         self.memory_pick = QComboBox(); ml.addWidget(self.memory_pick)
         self.memory_text = QPlainTextEdit(); ml.addWidget(self.memory_text)
@@ -298,6 +311,7 @@ class Window(QMainWindow):
         self.projects.setEnabled(False); self.api_button.setEnabled(False)
         self.statusBar().showMessage('正在后台处理，页面仍可切换；请等待任务完成后关闭软件…')
         outcome={'message':message}
+        previous_candidates={c.candidate_id for c in self.state.incomplete_chapters.get(self.chapter_number,[])} if self.state else set()
         def completed(result):
             try:
                 if success: success(result)
@@ -311,6 +325,10 @@ class Window(QMainWindow):
         self.job.succeeded.connect(completed)
         def failed(error):
             outcome['message']='本次操作失败，已保存内容保留；请查看指引后重试。'
+            if self.state:
+                self.refresh()
+                if any(c.candidate_id not in previous_candidates for c in self.state.incomplete_chapters.get(self.chapter_number,[])):
+                    outcome['message']='生成未完成；已返回的部分正文另存为候选，请在正文审阅中查看。'
             if isinstance(error,ModelError):self.show_issue(explain_error(str(error),error.diagnostic()))
             else:QMessageBox.warning(self,'操作未完成',error)
         self.job.failed.connect(failed)
@@ -451,7 +469,25 @@ class Window(QMainWindow):
         elif outline and outline.approved: text='本章大纲已确认，可以生成正文。'
         else: text='先确定本章目标，再生成大纲。满意后确认大纲并生成正文。'
         self.update_chapter_guidance()
+        self.partial_pick.blockSignals(True);self.partial_pick.clear()
+        for item in self.state.incomplete_chapters.get(self.chapter_number,[]):self.partial_pick.addItem(f'{item.created_at[:19]} · 未完成',item.candidate_id)
+        self.partial_pick.setCurrentIndex(self.partial_pick.count()-1);self.partial_pick.blockSignals(False)
+        self.partial_box.setVisible(self.partial_pick.count()>0);self.load_partial()
         self.loading = False
+
+    def load_partial(self):
+        if not self.state:return
+        item=next((c for c in self.state.incomplete_chapters.get(self.chapter_number,[]) if c.candidate_id==self.partial_pick.currentData()),None)
+        self.partial_text.setPlainText(item.text if item else '')
+        self.partial_hint.setPlainText('这是未完成的正文片段。采用前请确认，采用后仍需补全和审阅；正式正文及记忆保持保留。\n'+(item.diagnostic.get('details','') if item else ''))
+
+    def adopt_partial(self):
+        if not self.state or not self.partial_pick.currentData():return
+        if not self.confirm('将此未完成片段放入正文草稿？现有草稿会被替换，请先确认已保存；正式正文保持保留。'):return
+        result=self.sync(lambda s:s.adopt_incomplete(self.state.project.project_id,self.state.version,self.chapter_number,self.partial_pick.currentData()))
+        if result:
+            self.recovery.get('chapters',{}).pop(str(self.chapter_number),None);self.state=result;self.refresh();self.chapter_steps.setCurrentIndex(1)
+            self.dirty=True;self.stash();self.statusBar().showMessage('已采用为待补全草稿，请编辑补全后再定稿。')
 
     def update_chapter_guidance(self):
         if not self.state:return

@@ -26,11 +26,15 @@ def explain_error(message,diagnostic=None,memory=False):
         'server':'模型服务暂时异常，请稍后重试。',
         'configuration':'尚未配置可用的模型名称或密钥。',
         'budget':'输入资料超过当前上下文预算。这是本地检查，增加请求超时不能解决。',
+        'output_limit':'模型已达到输出额度上限，尚未完成生成。思考内容可能占用输出额度，增加超时不能补足额度。',
+        'incomplete':'模型返回未完成结果；请查看具体状态和原因。已返回的部分正文会另存为未完成候选（如有）。',
         'memory_review':'记忆候选需要审阅，或发现了人物关系、设定冲突。',
     }.get(code,'上次请求未完成，历史记录不足以判断具体原因。' if legacy else message or '记忆尚未整理完成，或上次任务被中断。')
-    settings=code in ('timeout','connection','authentication','permission','endpoint','configuration','request') or legacy
+    settings=code in ('timeout','connection','authentication','permission','endpoint','configuration','request','output_limit','incomplete') or legacy
     next_step={'timeout':'打开模型设置，适当增加超时（例如 300 秒），保存后重试。',
                'budget':'在详情中查看预算错误；精简必要资料或调整上下文预算后重试。',
+               'output_limit':'打开模型设置，将正文思考强度调整为低或关闭，或缩短本章目标后重试；整章生成如已返回正文，可在正文审阅中查看未完成候选。',
+               'incomplete':'先查看详情；如有未完成候选，可审阅后采用为草稿并手动补全。',
                'memory_review':'到“小说记忆”审阅候选和冲突，确认后重试整理记忆。',
                'quota':'检查服务商 API 额度后重试。','rate_limit':'等待一会儿，再重试当前任务。'}.get(code,'检查模型设置并测试连接，然后重试。' if settings else '稍后重试；仍失败可提供错误编号供排查。')
     reference=diagnostic.get('reference','历史记录未提供')
@@ -49,6 +53,7 @@ def chapter_checklist(state,number):
     if state.memory_status!='synced':next_step='先重试整理记忆；正文已保存，无需重新定稿。'
     elif not c:next_step='点击左侧“开始下一章”，或填写本章目标生成大纲。'
     elif not doc or not doc.approved:next_step='在“本章规划”生成并确认大纲。'
+    elif c.draft_incomplete:next_step='当前是未完成草稿，请编辑补全后再确认定稿。'
     elif not c.draft:next_step='大纲已确认，可以生成正文。'
     elif c.final and c.draft==c.final:next_step='本章已完成，可以开始下一章。'
     else:next_step='正文草稿已保存，审阅满意后确认定稿。'

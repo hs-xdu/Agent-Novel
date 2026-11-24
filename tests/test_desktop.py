@@ -97,9 +97,11 @@ def test_api_dialog_saves_and_applies_without_restart(window,qtbot):
     dialog.model.setText('qwen3.8-max'); dialog.key.setText('test-key')
     dialog.base.setText('https://dashscope.aliyuncs.com/compatible-mode/v1')
     dialog.mode.setCurrentText('openai'); dialog.protocol.setCurrentText('chat')
+    dialog.reasoning.setCurrentIndex(dialog.reasoning.findData('none'))
     dialog.save()
     assert window.settings.model=='qwen3.8-max'
     assert window.store.load().api_mode=='chat'
+    assert window.store.load().chapter_reasoning=='none'
     assert 'test-key' not in window.store.path.read_text()
 
 
@@ -213,3 +215,28 @@ def test_failure_dialog_text_is_selectable_and_all_details_copy(window,qtbot,mon
         dialog.accept();return 0
     monkeypatch.setattr(QDialog,'exec',inspect_dialog)
     window.show_issue(issue,memory=True)
+
+
+def test_partial_candidate_is_visible_without_overwriting_editor(window,qtbot,monkeypatch):
+    from test_workflow import prepare
+    from agent.service import NovelService
+    from llm.client import DemoWriter
+    from llm.errors import IncompleteGeneration
+    state=asyncio.run(prepare(NovelService(window.repo,DemoWriter())))
+    window.refresh_projects(state.project.project_id)
+    window.body.setPlainText('现有草稿保留')
+    async def partial(*args):raise IncompleteGeneration('输出未完成',partial_text='模型返回的半章',code='output_limit')
+    monkeypatch.setattr('app.desktop.DemoWriter.text',partial)
+    monkeypatch.setattr(window,'show_issue',lambda *args,**kwargs:None)
+    window.generate_chapter()
+    qtbot.waitUntil(lambda:window.job is None,timeout=5000)
+    assert window.body.toPlainText()=='现有草稿保留'
+    assert window.partial_pick.count()==1 and not window.partial_box.isHidden()
+    assert window.partial_content.isHidden()
+    window.partial_box.setChecked(True)
+    assert not window.partial_content.isHidden()
+    assert window.partial_text.toPlainText()=='模型返回的半章'
+    assert '另存' in window.statusBar().currentMessage()
+    window.confirm=lambda _:True;window.adopt_partial()
+    assert window.body.toPlainText()=='模型返回的半章'
+    assert window.state.chapters[1].draft_incomplete

@@ -12,7 +12,7 @@ import tiktoken
 from models.domain import Settings, Memory, ChapterPlan
 from memory.budget import request_cost, input_budget
 from prompts import SYSTEM, TASKS
-from llm.errors import ModelError, transport_error
+from llm.errors import ModelError, transport_error, incomplete_error
 
 T = TypeVar('T', bound=BaseModel)
 log = logging.getLogger(__name__)
@@ -30,6 +30,7 @@ class OpenAIWriter:
         self.base_url = settings.base_url if settings else os.getenv('OPENAI_BASE_URL') or None
         self.timeout = settings.timeout if settings else float(os.getenv('NOVEL_TIMEOUT', '120'))
         self.api_mode = settings.api_mode if settings else 'responses'
+        self.chapter_reasoning = settings.chapter_reasoning if settings else 'auto'
         self.client = None
 
     def _client(self):
@@ -58,22 +59,28 @@ class OpenAIWriter:
                         arguments['response_format'] = {'type': 'json_object'}
                     else:
                         arguments['max_tokens'] = output_limit
+                    if task in ('chapter','rewrite') and self.chapter_reasoning!='auto':arguments['reasoning_effort']=self.chapter_reasoning
                     result = await client.chat.completions.create(**arguments)
                     if not result.choices or result.choices[0].finish_reason != 'stop':
-                        raise ModelError('模型输出未完成，请调整输出预算或选择支持的模型')
+                        error=incomplete_error(result,time.monotonic()-started,task,'chat')
+                        log.warning('model incomplete reference=%s code=%s details=%s',error.reference,error.code,error.details.replace('\n','; '))
+                        raise error
                     value = result.choices[0].message.content
                     if not value:
                         raise ModelError('模型未返回有效内容')
                     return schema.model_validate_json(value) if schema else value
                 kwargs = dict(model=self.model, instructions=SYSTEM + '\n' + TASKS[task], input=context,
                               max_output_tokens=output_limit, store=False)
+                if task in ('chapter','rewrite') and self.chapter_reasoning!='auto':kwargs['reasoning']={'effort':self.chapter_reasoning}
                 if schema:
                     result = await client.responses.parse(**kwargs, text_format=schema)
                 else:
                     result = await client.responses.create(**kwargs)
                 log.info('model task=%s elapsed=%.2f request=%s', task, time.monotonic() - started, getattr(result, '_request_id', ''))
                 if result.status != 'completed':
-                    raise ModelError('模型输出未完成，请增加输出预算或缩短输入后重试')
+                    error=incomplete_error(result,time.monotonic()-started,task)
+                    log.warning('model incomplete reference=%s code=%s details=%s',error.reference,error.code,error.details.replace('\n','; '))
+                    raise error
                 value = result.output_parsed if schema else result.output_text
                 if value is None or (isinstance(value, str) and not value.strip()):
                     raise ModelError('模型未返回有效内容，可能拒绝了请求')
