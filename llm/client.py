@@ -31,6 +31,7 @@ class OpenAIWriter:
         self.timeout = settings.timeout if settings else float(os.getenv('NOVEL_TIMEOUT', '120'))
         self.api_mode = settings.api_mode if settings else 'responses'
         self.chapter_reasoning = settings.chapter_reasoning if settings else 'auto'
+        self.memory_reasoning = settings.memory_reasoning if settings else 'auto'
         self.client = None
 
     def _client(self):
@@ -44,6 +45,7 @@ class OpenAIWriter:
     async def _request(self, task, context, schema=None):
         client = self._client()
         output_limit = int(os.getenv('NOVEL_OUTPUT_TOKENS', '6000'))
+        effort=self.memory_reasoning if task=='memory' else self.chapter_reasoning if task in ('chapter','rewrite') else 'auto'
         budget = input_budget()
         if budget < 1 or request_cost(task,context,schema,self.api_mode) > budget:
             raise ModelError('请求超出上下文预算，请精简输入或提高上下文预算',code='budget')
@@ -59,7 +61,7 @@ class OpenAIWriter:
                         arguments['response_format'] = {'type': 'json_object'}
                     else:
                         arguments['max_tokens'] = output_limit
-                    if task in ('chapter','rewrite') and self.chapter_reasoning!='auto':arguments['reasoning_effort']=self.chapter_reasoning
+                    if effort!='auto':arguments['reasoning_effort']=effort
                     result = await client.chat.completions.create(**arguments)
                     if not result.choices or result.choices[0].finish_reason != 'stop':
                         error=incomplete_error(result,time.monotonic()-started,task,'chat')
@@ -71,7 +73,7 @@ class OpenAIWriter:
                     return schema.model_validate_json(value) if schema else value
                 kwargs = dict(model=self.model, instructions=SYSTEM + '\n' + TASKS[task], input=context,
                               max_output_tokens=output_limit, store=False)
-                if task in ('chapter','rewrite') and self.chapter_reasoning!='auto':kwargs['reasoning']={'effort':self.chapter_reasoning}
+                if effort!='auto':kwargs['reasoning']={'effort':effort}
                 if schema:
                     result = await client.responses.parse(**kwargs, text_format=schema)
                 else:

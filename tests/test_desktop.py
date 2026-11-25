@@ -98,10 +98,12 @@ def test_api_dialog_saves_and_applies_without_restart(window,qtbot):
     dialog.base.setText('https://dashscope.aliyuncs.com/compatible-mode/v1')
     dialog.mode.setCurrentText('openai'); dialog.protocol.setCurrentText('chat')
     dialog.reasoning.setCurrentIndex(dialog.reasoning.findData('none'))
+    dialog.memory_reasoning.setCurrentIndex(dialog.memory_reasoning.findData('low'))
     dialog.save()
     assert window.settings.model=='qwen3.8-max'
     assert window.store.load().api_mode=='chat'
     assert window.store.load().chapter_reasoning=='none'
+    assert window.store.load().memory_reasoning=='low'
     assert 'test-key' not in window.store.path.read_text()
 
 

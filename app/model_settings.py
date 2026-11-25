@@ -17,6 +17,7 @@ class ModelSettings(BaseModel):
     key: SecretStr = SecretStr('')
     timeout: int = Field(default=120, ge=5, le=600)
     chapter_reasoning: Literal['auto','none','low','medium','high','xhigh'] = 'low'
+    memory_reasoning: Literal['auto','none','low','medium','high','xhigh'] = 'none'
 
     @field_validator('base_url')
     @classmethod

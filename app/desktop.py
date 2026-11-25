@@ -87,19 +87,22 @@ class ApiDialog(QDialog):
         self.timeout = spin(120, 600); self.timeout.setMinimum(5)
         self.reasoning=QComboBox()
         for label,value in [('低（正文推荐）','low'),('关闭','none'),('中','medium'),('高','high'),('最高','xhigh'),('服务商默认（兼容）','auto')]:self.reasoning.addItem(label,value)
+        self.memory_reasoning=QComboBox()
+        for label,value in [('关闭（记忆推荐）','none'),('低','low'),('中','medium'),('高','high'),('最高','xhigh'),('服务商默认（兼容）','auto')]:self.memory_reasoning.addItem(label,value)
         settings = owner.settings
         self.mode.setCurrentText(settings.mode); self.protocol.setCurrentText(settings.api_mode)
         self.base.setText(settings.base_url); self.model.setText(settings.model)
         self.key.setText(settings.key.get_secret_value()); self.timeout.setValue(settings.timeout)
         self.reasoning.setCurrentIndex(self.reasoning.findData(settings.chapter_reasoning))
+        self.memory_reasoning.setCurrentIndex(self.memory_reasoning.findData(settings.memory_reasoning))
         presets = QHBoxLayout()
         button('OpenAI 地址', lambda: self.base.setText('https://api.openai.com/v1'), presets)
         button('千问北京地址', lambda: self.base.setText('https://dashscope.aliyuncs.com/compatible-mode/v1'), presets)
         layout.addLayout(presets)
-        for name, field in [('运行模式（demo 为固定示例）', self.mode), ('接口协议', self.protocol), ('API 基础地址', self.base), ('模型名称', self.model), ('API 密钥', self.key), ('超时秒数', self.timeout),('正文思考强度',self.reasoning)]:
+        for name, field in [('运行模式（demo 为固定示例）', self.mode), ('接口协议', self.protocol), ('API 基础地址', self.base), ('模型名称', self.model), ('API 密钥', self.key), ('超时秒数', self.timeout),('正文思考强度',self.reasoning),('记忆整理思考强度',self.memory_reasoning)]:
             form.addRow(name, field)
         layout.addLayout(form)
-        hint = QLabel('思考强度仅用于正文生成与段落改写。不同模型支持的档位不同，\n若接口拒绝该参数，请选择“服务商默认”。设定、大纲与记忆保持服务商默认。\n保存后下一次任务立即生效；密钥保存在系统凭据库。')
+        hint = QLabel('正文与记忆的思考强度独立设置；记忆整理默认关闭，设定与大纲保持默认。\n不同模型支持的档位不同，若接口拒绝该参数，请选择“服务商默认”。\n保存后下一次任务立即生效；密钥保存在系统凭据库。')
         hint.setWordWrap(True); layout.addWidget(hint)
         self.result = QLabel('测试会发送两次短请求，可能产生少量 API 费用。'); layout.addWidget(self.result)
         self.controls = QWidget(); row = QHBoxLayout(self.controls)
@@ -108,7 +111,7 @@ class ApiDialog(QDialog):
 
     def value(self):
         return ModelSettings(mode=self.mode.currentText(), api_mode=self.protocol.currentText(), base_url=self.base.text(),
-                             model=self.model.text().strip(), key=self.key.text().strip(), timeout=self.timeout.value(),chapter_reasoning=self.reasoning.currentData())
+                             model=self.model.text().strip(), key=self.key.text().strip(), timeout=self.timeout.value(),chapter_reasoning=self.reasoning.currentData(),memory_reasoning=self.memory_reasoning.currentData())
 
     def save(self):
         try:

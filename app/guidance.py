@@ -37,6 +37,9 @@ def explain_error(message,diagnostic=None,memory=False):
                'incomplete':'先查看详情；如有未完成候选，可审阅后采用为草稿并手动补全。',
                'memory_review':'到“小说记忆”审阅候选和冲突，确认后重试整理记忆。',
                'quota':'检查服务商 API 额度后重试。','rate_limit':'等待一会儿，再重试当前任务。'}.get(code,'检查模型设置并测试连接，然后重试。' if settings else '稍后重试；仍失败可提供错误编号供排查。')
+    if code=='output_limit' and (memory or '任务：memory' in diagnostic.get('details','')):
+        explanation='记忆整理达到输出额度上限，尚未返回完整记忆。已定稿正文仍保留；增加超时不能补足输出额度。'
+        next_step='打开模型设置，将“记忆整理思考强度”设为关闭，保存后重试整理记忆；无需重写或重新定稿正文。'
     reference=diagnostic.get('reference','历史记录未提供')
     details=f'错误编号：{reference}\n类别：{code}\n'+diagnostic.get('details','未记录底层信息')
     return Issue('正文已保存，记忆整理未成功' if memory else '本次生成未完成',explanation,next_step,details,settings)
